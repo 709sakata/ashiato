@@ -24,6 +24,18 @@ VIEWPOINTS = [
     "主体的に学習に取り組む態度",
 ]
 
+def load_meta_txt(path: str) -> dict:
+    """map_speakers.py が生成する _meta.txt を読み込んで session_info dict に変換"""
+    meta: dict = {}
+    key_map = {"活動日": "date", "場所": "location", "活動内容": "activity"}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            for jp, en in key_map.items():
+                if line.startswith(jp + ": "):
+                    meta[en] = line[len(jp) + 2:].strip()
+    return meta
+
+
 def load_csv(path: str) -> list[dict]:
     rows = []
     with open(path, encoding="utf-8-sig") as f:
@@ -66,7 +78,7 @@ def call_ollama(prompt: str, system: str = "") -> str:
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.3, "num_predict": 1500}
+        "options": {"temperature": 0.3, "num_predict": 3000}
     }
     if system:
         body["system"] = system
@@ -101,10 +113,9 @@ def normalize_child_report(child: str, raw: str) -> str:
     if not re.search(r'^## ' + re.escape(child), raw, flags=re.MULTILINE):
         raw = f'## {child}\n\n' + raw
 
-    # 「彼は」「彼女は」を児童名に置換
-    raw = raw.replace('彼女は', f'{child}は').replace('彼は', f'{child}は')
-    raw = raw.replace('彼女が', f'{child}が').replace('彼が', f'{child}が')
-    raw = raw.replace('彼女の', f'{child}の').replace('彼の', f'{child}の')
+    # 「彼女」「彼」を児童名に置換（助詞の前のみ、他の語の一部は除外）
+    raw = re.sub(r'彼女(?=[はがのをにへもと])', child, raw)
+    raw = re.sub(r'彼(?=[はがのをにへもと])', child, raw)
 
     return raw.strip()
 
@@ -116,7 +127,7 @@ def _parse_evidence(raw: str) -> dict[str, list[str]]:
     for line in raw.splitlines():
         stripped = line.strip()
         for v in VIEWPOINTS:
-            if re.match(r'^#{0,4}\s*' + re.escape(v), stripped):
+            if re.match(r'^#{1,4}\s*' + re.escape(v), stripped):
                 current = v
                 break
         else:
@@ -263,9 +274,15 @@ def _pick_representative_utterances(rows: list[dict], children: list[str], n: in
         candidates = [u for u in utterances if len(u) >= 8]
         if not candidates:
             candidates = utterances
-        # 均等にn件取る（先頭・末尾に偏らないよう中央付近から）
+        # 均等にn件取る（先頭・末尾に偏らないよう中央付近から）、重複除去
         step = max(1, len(candidates) // (n + 1))
-        picks = [candidates[min(i * step, len(candidates) - 1)] for i in range(1, n + 1)]
+        seen: set[str] = set()
+        picks: list[str] = []
+        for i in range(1, n + 1):
+            u = candidates[min(i * step, len(candidates) - 1)]
+            if u not in seen:
+                seen.add(u)
+                picks.append(u)
         for p in picks:
             lines.append(f"  {child}:「{p}」")
     return "\n".join(lines)
@@ -329,6 +346,7 @@ def save_evidence_json(
     child_counts = {child: sum(1 for r in rows if r["speaker"] == child) for child in children}
     utterances_sample = _pick_representative_utterances(rows, children, n=4)
     data = {
+        "schema_version": 1,
         "session_info": session_info,
         "supporter": supporter,
         "children": children,
@@ -424,11 +442,12 @@ def _run_stage2(
 
     for i, child in enumerate(children, 1):
         evidence = evidence_by_child.get(child, {v: [] for v in VIEWPOINTS})
-        child_count = sum(len(evidence[v]) for v in VIEWPOINTS)
+        # evidence_count は切片化後の証拠件数。CSVの発言件数とは異なる点に注意
+        evidence_count = sum(len(evidence[v]) for v in VIEWPOINTS)
 
-        if child_count == 0:
+        if evidence_count == 0:
             lines.append(f"### {child}")
-            lines.append(f"※ 本セッションでの発言記録なし")
+            lines.append(f"※ 本セッションの記録から観点別の根拠発言を確認できなかった")
             lines.append(f"")
             continue
 
@@ -482,6 +501,8 @@ def main():
 
     # Stage2単独: evidence.jsonから読み込んで報告書生成
     if args.stage == "2":
+        if args.csv:
+            print("[WARNING] --stage 2 では --csv は無視されます。", file=sys.stderr)
         if not args.evidence:
             parser.error("--stage 2 には --evidence <JSONファイル> が必要です")
         session_info, supporter, children, child_counts, utterances_sample, evidence_by_child = load_evidence_json(args.evidence)
@@ -497,10 +518,23 @@ def main():
     if not args.csv:
         parser.error("CSVファイルを指定してください（例: python3 generate_report.py mapped.csv）")
 
+    # _meta.txt を自動検出してセッション情報を補完（CLI引数で上書き可）
+    meta_path = str(Path(args.csv).with_suffix("")) + "_meta.txt"
+    meta_from_file: dict = {}
+    if Path(meta_path).exists():
+        meta_from_file = load_meta_txt(meta_path)
+        print(f"📋 メタ情報を読み込みました: {meta_path}")
+    else:
+        print(f"ℹ️  _meta.txt が見つかりません。CLI引数のセッション情報を使用します。", file=sys.stderr)
+
+    default_date     = datetime.today().strftime("%Y年%m月%d日")
+    default_location = "里山フィールド"
+    default_activity = "自然探索・昼食調理・火起こし体験"
+
     session_info = {
-        "date": args.date,
-        "location": args.location,
-        "activity": args.activity,
+        "date":     args.date     if args.date     != default_date     else meta_from_file.get("date",     default_date),
+        "location": args.location if args.location != default_location else meta_from_file.get("location", default_location),
+        "activity": args.activity if args.activity != default_activity else meta_from_file.get("activity", default_activity),
     }
 
     print(f"📂 読み込み中: {args.csv}")
