@@ -1,54 +1,86 @@
 # あしあと（Ashiato）
 
-ASOBOプロジェクトの活動セッションを自動記録・報告書化するパイプラインです。
+学校外の支援活動セッションを、音声記録から教育的エビデンスへ自動変換するパイプラインです。
 
-## 背景・目的
+---
 
-**ASOBO**は、不登校の子どもたちを対象とした里山体験型の学校外支援活動です。
-現職教員のらぁゆが主導し、月1〜2回のセッションで自然探索・調理・火起こしなどの体験を提供しています。
+## なぜこのツールが必要か
 
-活動の成果を学校（校長）や保護者に伝えるために、セッションの記録を「指導要録」に準じた言語で報告書化する必要があります。
-このパイプラインは、ICレコーダーの音声から報告書生成までを自動化し、支援者の記録業務を大幅に削減することを目的としています。
+学校外の居場所（フリースクール・自然体験活動など）では、子どもたちの成長が現場の実感として確かに存在します。しかし、それを「学校の言葉」で記録・共有するコストが、支援の継続的な課題になっています。
 
-## システム構成
+現職教員が子どもへの伴走に全力を注ぐほど、記録業務は後回しになります。その結果：
+
+- 学校側は出席認定の判断に必要な根拠を受け取れない
+- 保護者は子の微細な成長が見えないまま孤立感を深める
+- 支援現場・学校・家庭の間に**情報の分断**が生まれる
+
+このツールはその構造的な問題をAIで解消します。音声記録だけを残せばあとは自動処理が進み、AIが一次記録を整理した上で、現職教員が教育的な観点から内容を確認・承認して「指導要録」準拠の報告書を出力します。
+
+**AIが評価・判断するのではなく、根拠を提示し、人間（教員）が判断する** という Human-in-the-loop 設計が核心です。
+
+---
+
+## アーキテクチャ
+
+### ハードウェア構成
 
 ```
-Mac mini（M1, 8GB）
-├── Whisper large-v3     # 日本語文字起こし
-├── pyannote 3.1         # 話者分離（diarization）
-└── Ollama qwen2.5:7b    # 報告書生成・活動内容抽出
+MacBook Air（録音・操作端末）
+      ↕ SSH / SCP
+Mac mini M1 8GB（ローカル推論サーバー）
+├── Whisper large-v3         # 日本語音声認識
+├── pyannote 3.1             # 話者分離（diarization）
+└── Ollama: qwen2.5:7b       # 報告書生成・活動内容抽出
 ```
 
-## パイプライン全体像
+すべてローカル環境で完結します。音声データや発言記録は外部サーバーへ送信されません。
+
+### 処理パイプライン
 
 ```
-① ICレコーダー録音（DEXION, MP3）
-      ↓ USBでMacBook Airに取り込み
-② scp → Mac mini転送
+① ICレコーダー録音（MP3）
+      ↓ USB → MacBook Air
+② scp → Mac mini 転送
       ↓
-③ audio-diarization-transcript（Whisper + pyannote）
-      → 文字起こしCSV（start, end, speaker, text）
+③ Whisper + pyannote
+      → 文字起こし CSV（start, end, speaker, text）
       ↓
-④ map_speakers.py
-      → SPEAKER_00等を実名にマッピング
-      → mapped.csv + _meta.txt
+④ map_speakers.py（対話式）
+      → SPEAKER_00 等を実名にマッピング
+      → mapped.csv + _meta.txt（日付・場所・活動内容）
       ↓
 ⑤ generate_report.py
-      → Ollamaで報告書生成
+      → 児童ごとの観点別学習状況を生成
       → report_校長向け_YYYYMMDD.md
 ```
+
+### データの流れと責任分界
+
+```
+現場音声（一次ソース）
+      ↓ AI処理（Whisper・pyannote・Ollama）
+文字起こし・話者分離・観点別記述の草稿
+      ↓ 人間によるレビュー・承認（現職教員）
+正式な連携支援レポート（校長向け・保護者向け）
+```
+
+AIは「一次記録の整理」と「教育的フォーマットへの翻訳補助」を担います。最終確認・承認は必ず支援者（教員）が行います。
+
+---
 
 ## ファイル構成
 
 ```
 ashiato/
 ├── README.md
-├── ashiato.sh          # パイプライン全体を実行するシェルスクリプト
-├── record.sh           # 録音補助スクリプト
-├── transcribe.sh       # 文字起こし実行スクリプト
-├── map_speakers.py     # 話者名マッピング + 活動内容抽出（対話式）
-└── generate_report.py  # 報告書生成（校長向けMarkdown）
+├── ashiato.sh          # 全工程を統括するメインコマンド
+├── record.sh           # 録音補助
+├── transcribe.sh       # Whisper + pyannote による文字起こし
+├── map_speakers.py     # 話者名マッピング・活動内容抽出（対話式）
+└── generate_report.py  # 観点別学習状況レポート生成
 ```
+
+---
 
 ## 使い方
 
@@ -63,7 +95,7 @@ bash ~/scripts/ashiato/transcribe.sh <音声ファイル.mp3>
 
 ```bash
 python3 ~/scripts/ashiato/map_speakers.py output.csv
-# → 対話式でSPEAKER_00等に名前を割り当て
+# 対話式で SPEAKER_00 等に名前を割り当てる
 # → mapped.csv と _meta.txt が生成される
 ```
 
@@ -78,26 +110,20 @@ python3 ~/scripts/ashiato/generate_report.py mapped.csv \
 # → report_校長向け_YYYYMMDD.md が生成される
 ```
 
-## 重要な設計思想
-
-```
-現場記録（一次ソース）≠ 校長向け報告書
-
-現場記録: 子どもの成長が主語、AIは文字起こし・整理のみ
-報告書:   指導要録の言語への「翻訳」、AIが翻訳を補助
-```
-
-- **AIが判断・評価するのではなく、現職教員（らぁゆ）が判断し、AIが根拠を提供する**
-- 報告書の最終確認・承認は必ず支援者が行う
-- 音声データ・CSVは個人情報のためGitHub管理対象外（`.gitignore`）
-
-## 開発環境のセットアップ（Mac mini）
+### 全工程一括実行
 
 ```bash
-# リポジトリクローン
+bash ~/scripts/ashiato/ashiato.sh run [録音分数]
+```
+
+---
+
+## セットアップ（Mac mini）
+
+```bash
 git clone git@github.com:709sakata/ashiato.git ~/scripts/ashiato
 
-# audio-diarization-transcriptのセットアップ（初回のみ）
+# audio-diarization-transcript の初回セットアップ
 cd ~/bin/audio-diarization-transcript
 source ~/.local/bin/env
 uv sync
@@ -113,11 +139,10 @@ git add . && git commit -m "変更内容" && git push
 cd ~/scripts/ashiato && git pull
 ```
 
-## 関係者
+---
 
-| 役割 | 名前 |
-|------|------|
-| プロジェクト責任者 | 阪田直樹（株式会社和平） |
-| 現場リーダー・教員 | らぁゆ |
-| 技術担当 | 阪田 |
-| 受益者 | 不登校児童 5名 |
+## プライバシーとデータ管理
+
+- 音声データ・文字起こし CSV は個人情報のため `.gitignore` で管理対象外
+- すべての推論処理はローカル完結（外部 API 不使用）
+- 報告書の最終確認・承認は支援者（教員）が実施
