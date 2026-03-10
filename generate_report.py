@@ -83,6 +83,28 @@ def call_ollama(prompt: str) -> str:
         print(f"[ERROR] Ollama接続失敗: {e}", file=sys.stderr)
         sys.exit(1)
 
+def normalize_child_report(child: str, raw: str) -> str:
+    """LLMの出力を強制的に ## 児童名 / ### 観点 形式に正規化する"""
+    import re
+
+    # 児童名見出しを ## に統一（#, ###, ####等すべて）
+    raw = re.sub(r'^#{1,6}\s*' + re.escape(child) + r'\s*$', f'## {child}', raw, flags=re.MULTILINE)
+
+    # 観点見出しを ### に統一
+    for viewpoint in ["知識・技能", "思考・判断・表現", "主体的に学習に取り組む態度"]:
+        raw = re.sub(r'^#{1,6}\s*' + re.escape(viewpoint) + r'\s*$', f'### {viewpoint}', raw, flags=re.MULTILINE)
+
+    # 先頭に ## 児童名 がなければ追加
+    if not re.search(r'^## ' + re.escape(child), raw, flags=re.MULTILINE):
+        raw = f'## {child}\n\n' + raw
+
+    # 「彼は」「彼女は」を児童名に置換
+    raw = raw.replace('彼女は', f'{child}は').replace('彼は', f'{child}は')
+    raw = raw.replace('彼女が', f'{child}が').replace('彼が', f'{child}が')
+    raw = raw.replace('彼女の', f'{child}の').replace('彼の', f'{child}の')
+
+    return raw.strip()
+
 def generate_child_report(child: str, transcript: str, session_info: dict) -> str:
     """児童1人分の観点別記述を生成"""
     prompt = f"""あなたは小学校の教育記録を作成する専門家です。
@@ -121,7 +143,7 @@ def generate_child_report(child: str, transcript: str, session_info: dict) -> st
 ### 主体的に学習に取り組む態度
 （ここに記述）
 """
-    return call_ollama(prompt)
+    return normalize_child_report(child, call_ollama(prompt))
 
 def generate_session_summary(rows: list[dict], children: list[str], session_info: dict) -> str:
     """セッション全体サマリーを生成"""
