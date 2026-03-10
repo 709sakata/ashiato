@@ -183,7 +183,7 @@ def main():
     parser.add_argument("--date", default=datetime.today().strftime("%Y年%m月%d日"), help="セッション日付")
     parser.add_argument("--location", default="里山フィールド", help="活動場所")
     parser.add_argument("--activity", default="自然探索・昼食調理・火起こし体験", help="活動内容")
-    parser.add_argument("--supporter", default="塚原", help="支援者名（除外用）")
+    parser.add_argument("--supporter", default="山田", help="支援者名（除外用）")
     parser.add_argument("--output", default=None, help="出力ファイルパス")
     args = parser.parse_args()
 

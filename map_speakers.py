@@ -53,7 +53,7 @@ def map_speakers(input_csv, output_csv=None):
 
     print("─" * 50)
     print("各話者の名前を入力してください")
-    print("（例：支援者：塚原 / 児童：山田太郎）")
+    print("（例：支援者：山田 / 児童：鈴木太郎）")
     print("─" * 50 + "\n")
 
     mapping = {}

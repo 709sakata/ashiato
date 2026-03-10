@@ -106,7 +106,7 @@ python3 ~/scripts/ashiato/generate_report.py mapped.csv \
   --date "2025年11月23日" \
   --location "里山フィールド（兵庫県姫路市）" \
   --activity "自然探索・虫採り・川遊び・昼食調理・火起こし体験" \
-  --supporter "塚原"
+  --supporter "山田"
 # → report_校長向け_YYYYMMDD.md が生成される
 ```
 
