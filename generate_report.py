@@ -73,12 +73,12 @@ def build_full_transcript(rows: list[dict]) -> str:
             lines.append(f"[{row['start']}] {row['speaker']}: {row['text']}")
     return "\n".join(lines)
 
-def call_ollama(prompt: str, system: str = "") -> str:
+def call_ollama(prompt: str, system: str = "", num_predict: int = -1) -> str:
     body: dict = {
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.3, "num_predict": 3000}
+        "options": {"temperature": 0.3, "num_predict": num_predict}
     }
     if system:
         body["system"] = system
@@ -191,7 +191,7 @@ def extract_evidence_per_viewpoint(child: str, transcript: str) -> dict[str, lis
 ### 主体的に学習に取り組む態度
 - 「（発言テキスト）」
 """
-    raw = call_ollama(prompt, system=system)
+    raw = call_ollama(prompt, system=system, num_predict=-1)
     return _parse_evidence(raw)
 
 
@@ -263,7 +263,7 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
 ### 主体的に学習に取り組む態度
 （ここに記述）
 """
-    return normalize_child_report(child, call_ollama(prompt, system=system))
+    return normalize_child_report(child, call_ollama(prompt, system=system, num_predict=2000))
 
 def _pick_representative_utterances(rows: list[dict], children: list[str], n: int = 2) -> str:
     """各児童の代表的な発言をn件ずつ抽出してテキスト化"""
@@ -333,7 +333,7 @@ def generate_session_summary(
 ・支援者が観察した事実として書くこと
 ・前置きや後書きは不要、総括の文章のみ出力すること
 """
-    return call_ollama(prompt, system=system)
+    return call_ollama(prompt, system=system, num_predict=500)
 
 def save_evidence_json(
     evidence_by_child: dict[str, dict[str, list[str]]],
