@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+import csv
+import sys
+import os
+import json
+import urllib.request
+from datetime import datetime
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "qwen2.5:7b"
+
+def ollama_extract_activity(csv_text):
+    prompt = f"""以下はASOBOプロジェクトの里山活動セッションの発言記録です。
+この記録から、実際に行われた活動内容を簡潔に抽出してください。
+
+出力形式：「自然観察・虫採り・植物観察」のように「・」区切りで3〜5項目。
+余計な説明は不要です。活動内容のみを1行で出力してください。
+
+発言記録：
+{csv_text}
+"""
+    payload = json.dumps({
+        "model": MODEL,
+        "prompt": prompt,
+        "stream": False
+    }).encode()
+
+    req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as res:
+        result = json.loads(res.read())
+        return result["response"].strip()
+
+def map_speakers(input_csv, output_csv=None):
+    rows = []
+    speakers = []
+    with open(input_csv, encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
+            if row['speaker'] not in speakers:
+                speakers.append(row['speaker'])
+
+    speakers.sort()
+    print(f"\n📋 {len(speakers)} 名の話者を検出しました\n")
+
+    for sp in speakers:
+        samples = [r['text'] for r in rows if r['speaker'] == sp][:3]
+        count = len([r for r in rows if r['speaker'] == sp])
+        print(f"  {sp}（{count}発言）")
+        for s in samples:
+            print(f"    →「{s}」")
+        print()
+
+    print("─" * 50)
+    print("各話者の名前を入力してください")
+    print("（例：支援者：塚原 / 児童：山田太郎）")
+    print("─" * 50 + "\n")
+
+    mapping = {}
+    for sp in speakers:
+        name = input(f"{sp} の名前: ").strip()
+        mapping[sp] = name if name else sp
+
+    print("\n─" * 50)
+    print("セッション情報")
+    print("─" * 50)
+    date     = input("活動日（例：2026年10月18日）: ").strip()
+    location = input("活動場所（例：里山フィールド・姫路市）: ").strip()
+
+    # LLMで活動内容を抽出
+    print("\n⏳ 活動内容をAIが抽出中...")
+    csv_text = "\n".join([f"{r['speaker']}：{r['text']}" for r in rows])
+    try:
+        suggested = ollama_extract_activity(csv_text)
+        print(f"\n💡 AI提案：{suggested}")
+        activity = input(f"活動内容（Enterでそのまま使用、修正する場合は入力）: ").strip()
+        if not activity:
+            activity = suggested
+    except Exception as e:
+        print(f"⚠️  AI抽出失敗（{e}）、手動入力してください")
+        activity = input("活動内容（例：自然観察・虫採り）: ").strip()
+
+    if output_csv is None:
+        base = os.path.splitext(input_csv)[0]
+        ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        output_csv = f"{base}_mapped_{ts}.csv"
+
+    with open(output_csv, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['start','end','speaker','text'])
+        writer.writeheader()
+        for row in rows:
+            row['speaker'] = mapping.get(row['speaker'], row['speaker'])
+            writer.writerow(row)
+
+    meta_path = output_csv.replace('.csv', '_meta.txt')
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        f.write(f"活動日: {date}\n")
+        f.write(f"場所: {location}\n")
+        f.write(f"活動内容: {activity}\n")
+        f.write("話者マッピング:\n")
+        for orig, name in mapping.items():
+            f.write(f"  {orig} → {name}\n")
+
+    print(f"\n✅ 完了: {output_csv}")
+    print(f"   メタ情報: {meta_path}")
+    return output_csv, meta_path
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("使い方: python3 map_speakers.py <input.csv> [output.csv]")
+        sys.exit(1)
+    input_csv = sys.argv[1]
+    output_csv = sys.argv[2] if len(sys.argv) > 2 else None
+    map_speakers(input_csv, output_csv)
