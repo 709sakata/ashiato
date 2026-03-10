@@ -108,44 +108,118 @@ def normalize_child_report(child: str, raw: str) -> str:
 
     return raw.strip()
 
-def generate_child_report(child: str, transcript: str, session_info: dict, child_count: int) -> str:
-    """児童1人分の観点別記述を生成"""
+def _parse_evidence(raw: str) -> dict[str, list[str]]:
+    """切片化LLM出力をパースして観点別発言リストに変換"""
+    import re
+    result: dict[str, list[str]] = {v: [] for v in VIEWPOINTS}
+    current = None
+    for line in raw.splitlines():
+        stripped = line.strip()
+        for v in VIEWPOINTS:
+            if re.match(r'^#{0,4}\s*' + re.escape(v), stripped):
+                current = v
+                break
+        else:
+            if current and stripped.startswith("- "):
+                text = stripped[2:].strip().strip("「」")
+                if text and text not in ("なし", "（根拠発言なし）"):
+                    result[current].append(text)
+    return result
+
+
+def extract_evidence_per_viewpoint(child: str, transcript: str) -> dict[str, list[str]]:
+    """Stage 1 - 切片化: 発言記録を観点別に分類し、根拠発言をそのまま抜き出す"""
+    system = (
+        "あなたは発言記録の切片化専門家です。"
+        "発言テキストを一字一句そのまま抜き出します。要約・解釈・補完は一切行いません。"
+    )
+
+    prompt = f"""以下の発言記録から、各観点に該当する発言を「そのまま」抜き出してください。
+
+【{child}さんの発言記録（支援者とのやりとり含む）】
+{transcript}
+
+【判定基準（教員の思考プロセス）】
+各発言を読み、以下の問いに「はい」と答えられる発言を抜き出してください。
+
+■ 知識・技能
+→「この発言は、自然の生き物・植物・現象について新しい知識を得たことを示しているか？
+   または、道具の使い方・技能（火起こし、調理、虫の捕まえ方等）を習得・実践したことを示しているか？」
+
+■ 思考・判断・表現
+→「この発言は、自然現象への疑問・気づきを言葉にしているか？
+   観察した結果を仮説・比較・感想として表現しているか？自分の判断を述べているか？」
+
+■ 主体的に学習に取り組む態度
+→「この発言は、自ら進んで挑戦しようとする意欲を示しているか？
+   困難に粘り強く取り組む姿・次回への意欲・他者との協力意識を示しているか？」
+
+【厳守事項】
+- 発言テキストは一字一句そのまま抜き出すこと（要約・編集・補完・解釈禁止）
+- 発言の意図・理由が記録内で明言されていない場合は、推測で補完しないこと
+- 「わからない」「おそらく」などのニュアンスが含まれる発言はそのまま記録すること
+- 1つの発言が複数の観点に該当する場合は、それぞれに記載すること（複数所属OK）
+- 判定基準に当てはまらない発言は除外すること
+- 該当発言が0件の観点は「なし」と記載すること
+- 前置きや後書きは出力しないこと
+
+出力フォーマット（この通りに出力すること）:
+### 知識・技能
+- 「（発言テキスト）」
+
+### 思考・判断・表現
+- 「（発言テキスト）」
+
+### 主体的に学習に取り組む態度
+- 「（発言テキスト）」
+"""
+    raw = call_ollama(prompt, system=system)
+    return _parse_evidence(raw)
+
+
+def generate_child_report(child: str, evidence: dict[str, list[str]], session_info: dict) -> str:
+    """Stage 2 - 記述生成: 切片化済みの根拠発言リストをもとに観点別記述を作成"""
     system = (
         "あなたは支援者の観察記録を整理する記録補助者です。"
-        "与えられた【発言記録】に存在する事実のみを根拠に記述します。"
+        "与えられた根拠発言リストのみを使って記述します。"
         "記録にない内容の創作・推測・補完は絶対に行いません。"
         "この記録は学校への出席扱い申請に使用される公式文書の下書きです。"
     )
 
-    prompt = f"""以下は、不登校支援活動「ASOBO」での里山体験セッションにおける、{child}さんの発言記録です。
+    # 観点別根拠発言テキストを構築（件数を明示）
+    evidence_parts = []
+    for v in VIEWPOINTS:
+        utterances = evidence[v]
+        evidence_parts.append(f"### {v}（{len(utterances)}件）")
+        if utterances:
+            for u in utterances:
+                evidence_parts.append(f"- 「{u}」")
+        else:
+            evidence_parts.append("- （根拠発言なし）")
+    evidence_text = "\n".join(evidence_parts)
+
+    prompt = f"""以下は、{child}さんの発言を観点別に切り出した根拠発言リストです（事前に確認済み）。
 
 【セッション情報】
 日付: {session_info['date']}
 活動場所: {session_info['location']}
 活動内容: {session_info['activity']}
 
-【{child}さんの発言記録（支援者とのやりとり含む）】
-{transcript}
-
-【この児童の総発言数: {child_count}件】
-
-【観点の定義（里山体験における解釈）】
-- 知識・技能: 自然の生き物・植物・道具（火起こし等）に関する知識の獲得や技能の習得
-- 思考・判断・表現: 自然現象への疑問・観察結果の言語化・仮説・比較・感想の表現
-- 主体的に学習に取り組む態度: 自発的な挑戦・粘り強さ・次回への意欲・他者との協力意識
+【観点別根拠発言（これのみを使用すること）】
+{evidence_text}
 
 【指示】
-上記の【発言記録】のみをもとに、小学校の「指導要録」に記載する観点別学習状況の記述を作成してください。
+上記の根拠発言リストのみをもとに、指導要録の観点別学習状況の記述を作成してください。
 
 以下のルールを厳守してください：
-- 【発言記録】に存在しないエピソード・事実・発言は絶対に記述しないこと（創作・推測・補完禁止）
-- 根拠となる発言が記録内に見当たらない観点は「本セッションの記録からは確認できなかった」と記述すること
+- 根拠発言リストに存在しない事実は絶対に記述しないこと（創作・推測・補完禁止）
+- 根拠発言が「なし」の観点は「本セッションの記録からは確認できなかった」と記述すること
 - 出力は必ず下記のフォーマット通りに、見出しレベルも含めて正確に出力すること
-- 各観点は2〜3文で、必ず【発言記録】中の具体的な発言を根拠として記述すること
+- 各観点は2〜3文で、根拠発言を引用・参照しながら記述すること
 - 人称は「{child}は」で統一し、「彼は」「彼女は」は使わないこと
 - 支援者が実際に観察した事実として書くこと（「〜した」「〜と発言した」「〜と述べた」等）
 - 体言止めや箇条書きは使わず、文章で書くこと
-- 各観点の末尾に（根拠発言数: N件）を括弧書きで添えること。Nはその観点の記述で引用・参照した発言の件数のみを数えること（総発言数{child_count}件を超えないこと）
+- 各観点の末尾に（根拠発言数: N件）を括弧書きで添えること。Nは上記根拠発言の括弧内の件数をそのまま記載すること
 - 文字起こし誤りと思われる語（ひらがな・カタカナ誤変換など不自然な表現）は文脈から正しい語に解釈して記述し、誤変換をそのまま記述しないこと
 - フォーマット以外の前置きや後書きは一切出力しないこと
 
@@ -272,8 +346,6 @@ def main():
     lines.append(f"")
 
     for i, child in enumerate(children, 1):
-        print(f"✍️  [{i}/{len(children)}] {child} の記述を生成中...")
-        transcript = build_transcript_per_child(rows, child)
         child_count = sum(1 for r in rows if r["speaker"] == child)
 
         if child_count == 0:
@@ -282,7 +354,24 @@ def main():
             lines.append(f"")
             continue
 
-        report = generate_child_report(child, transcript, session_info, child_count)
+        transcript = build_transcript_per_child(rows, child)
+
+        # Stage 1: 切片化
+        print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
+        evidence = extract_evidence_per_viewpoint(child, transcript)
+
+        # 中間確認: 抽出された根拠発言を表示（ハルシネーション確認用）
+        print(f"  ┌─ 切片化結果（確認してください）")
+        for v in VIEWPOINTS:
+            utterances = evidence[v]
+            print(f"  │ 【{v}】{len(utterances)}件")
+            for u in utterances:
+                print(f"  │   ・{u}")
+        print(f"  └─────────────────")
+
+        # Stage 2: 記述生成
+        print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
+        report = generate_child_report(child, evidence, session_info)
         lines.append(report)
         lines.append(f"")
         lines.append(f"---")
