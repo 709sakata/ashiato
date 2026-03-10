@@ -270,11 +270,21 @@ def _pick_representative_utterances(rows: list[dict], children: list[str], n: in
             lines.append(f"  {child}:「{p}」")
     return "\n".join(lines)
 
-def generate_session_summary(rows: list[dict], children: list[str], session_info: dict) -> str:
-    """セッション全体サマリーを生成"""
-    stats = {child: sum(1 for r in rows if r["speaker"] == child) for child in children}
-    stats_text = "\n".join(f"  {k}: {v}件" for k, v in stats.items())
-    representative = _pick_representative_utterances(rows, children, n=4)
+def generate_session_summary(
+    children: list[str],
+    session_info: dict,
+    *,
+    rows: list[dict] | None = None,
+    child_counts: dict[str, int] | None = None,
+    utterances_sample: str | None = None,
+) -> str:
+    """セッション全体サマリーを生成。rows か (child_counts + utterances_sample) のどちらかが必要"""
+    if child_counts is None:
+        child_counts = {child: sum(1 for r in rows if r["speaker"] == child) for child in children}
+    if utterances_sample is None:
+        utterances_sample = _pick_representative_utterances(rows, children, n=4)
+    stats_text = "\n".join(f"  {k}: {v}件" for k, v in child_counts.items())
+    representative = utterances_sample
 
     system = (
         "あなたは支援者の観察記録を整理する記録補助者です。"
@@ -308,15 +318,184 @@ def generate_session_summary(rows: list[dict], children: list[str], session_info
 """
     return call_ollama(prompt, system=system)
 
+def save_evidence_json(
+    evidence_by_child: dict[str, dict[str, list[str]]],
+    session_info: dict,
+    supporter: str,
+    children: list[str],
+    rows: list[dict],
+    path: str,
+) -> None:
+    child_counts = {child: sum(1 for r in rows if r["speaker"] == child) for child in children}
+    utterances_sample = _pick_representative_utterances(rows, children, n=4)
+    data = {
+        "session_info": session_info,
+        "supporter": supporter,
+        "children": children,
+        "child_counts": child_counts,
+        "utterances_sample": utterances_sample,
+        "evidence": evidence_by_child,
+    }
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_evidence_json(path: str) -> tuple[dict, str, list[str], dict, str, dict[str, dict[str, list[str]]]]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return (
+        data["session_info"],
+        data["supporter"],
+        data["children"],
+        data.get("child_counts", {}),
+        data.get("utterances_sample", ""),
+        data["evidence"],
+    )
+
+
+def _run_stage1(rows: list[dict], children: list[str], session_info: dict, supporter: str, date_slug: str) -> tuple[str, dict]:
+    """切片化を実行してevidence.jsonに保存し、パスとevidence dictを返す"""
+    evidence_by_child: dict[str, dict[str, list[str]]] = {}
+
+    for i, child in enumerate(children, 1):
+        child_count = sum(1 for r in rows if r["speaker"] == child)
+        if child_count == 0:
+            evidence_by_child[child] = {v: [] for v in VIEWPOINTS}
+            continue
+
+        transcript = build_transcript_per_child(rows, child)
+        print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
+        evidence = extract_evidence_per_viewpoint(child, transcript)
+        evidence_by_child[child] = evidence
+
+        print(f"  ┌─ 切片化結果（確認してください）")
+        for v in VIEWPOINTS:
+            utterances = evidence[v]
+            print(f"  │ 【{v}】{len(utterances)}件")
+            for u in utterances:
+                print(f"  │   ・{u}")
+        print(f"  └─────────────────")
+
+    evidence_path = f"evidence_{date_slug}.json"
+    save_evidence_json(evidence_by_child, session_info, supporter, children, rows, evidence_path)
+    print(f"\n💾 切片化結果を保存しました: {evidence_path}")
+    print("   → 内容を確認・修正後、Stage2を実行してください:")
+    print(f"   python3 generate_report.py --stage 2 --evidence {evidence_path}")
+    return evidence_path, evidence_by_child
+
+
+def _run_stage2(
+    evidence_by_child: dict[str, dict[str, list[str]]],
+    children: list[str],
+    session_info: dict,
+    supporter: str,
+    output_path: str,
+    *,
+    rows: list[dict] | None = None,
+    child_counts: dict[str, int] | None = None,
+    utterances_sample: str | None = None,
+) -> None:
+    """evidence dictから報告書Markdownを生成して書き出す"""
+    lines = []
+    lines.append(f"# ASOBO 活動報告書（校長向け）")
+    lines.append(f"")
+    lines.append(f"**日付**: {session_info['date']}  ")
+    lines.append(f"**場所**: {session_info['location']}  ")
+    lines.append(f"**活動**: {session_info['activity']}  ")
+    lines.append(f"**参加児童**: {', '.join(children)}（{len(children)}名）  ")
+    lines.append(f"**支援者**: {supporter}  ")
+    lines.append(f"**記録生成日**: {datetime.today().strftime('%Y年%m月%d日')}  ")
+    lines.append(f"")
+    lines.append(f"---")
+    lines.append(f"")
+
+    print("📝 セッション総括を生成中...")
+    summary = generate_session_summary(
+        children, session_info,
+        rows=rows, child_counts=child_counts, utterances_sample=utterances_sample,
+    )
+    lines.append(f"## セッション総括")
+    lines.append(f"")
+    lines.append(summary)
+    lines.append(f"")
+    lines.append(f"---")
+    lines.append(f"")
+
+    lines.append(f"## 観点別学習状況（児童別）")
+    lines.append(f"")
+
+    for i, child in enumerate(children, 1):
+        evidence = evidence_by_child.get(child, {v: [] for v in VIEWPOINTS})
+        child_count = sum(len(evidence[v]) for v in VIEWPOINTS)
+
+        if child_count == 0:
+            lines.append(f"### {child}")
+            lines.append(f"※ 本セッションでの発言記録なし")
+            lines.append(f"")
+            continue
+
+        print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
+        report = generate_child_report(child, evidence, session_info)
+        lines.append(report)
+        lines.append(f"")
+        lines.append(f"---")
+        lines.append(f"")
+
+    lines.append(f"## 備考")
+    lines.append(f"")
+    lines.append(f"本報告書は、音声記録をWhisper（自動文字起こし）およびAI言語モデル（Ollama）で補助処理したものです。")
+    lines.append(f"記述内容は担当支援者（{supporter}）が確認・承認したものを正式記録とします。")
+    lines.append(f"")
+
+    content = "\n".join(lines)
+    Path(output_path).write_text(content, encoding="utf-8")
+    print(f"\n✅ 完了: {output_path}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="あしあと 報告書生成")
-    parser.add_argument("csv", help="入力CSVファイル")
+    parser = argparse.ArgumentParser(
+        description="あしあと 報告書生成",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+実行例:
+  # Stage1（切片化）のみ実行 → evidence_YYYYMMDD.json を生成
+  python3 generate_report.py mapped.csv --stage 1
+
+  # Stage2（記述生成）のみ実行 → evidence.json を読み込んで報告書を生成
+  python3 generate_report.py --stage 2 --evidence evidence_20261018.json
+
+  # 両ステージ一括実行（デフォルト）
+  python3 generate_report.py mapped.csv
+""",
+    )
+    parser.add_argument("csv", nargs="?", default=None, help="入力CSVファイル（Stage2単独実行時は不要）")
+    parser.add_argument("--stage", choices=["all", "1", "2"], default="all",
+                        help="実行ステージ: 1=切片化のみ, 2=記述生成のみ, all=両方（デフォルト）")
+    parser.add_argument("--evidence", default=None,
+                        help="Stage2専用: 切片化結果JSONファイルのパス")
     parser.add_argument("--date", default=datetime.today().strftime("%Y年%m月%d日"), help="セッション日付")
     parser.add_argument("--location", default="里山フィールド", help="活動場所")
     parser.add_argument("--activity", default="自然探索・昼食調理・火起こし体験", help="活動内容")
     parser.add_argument("--supporter", default="山田", help="支援者名（除外用）")
-    parser.add_argument("--output", default=None, help="出力ファイルパス")
+    parser.add_argument("--output", default=None, help="出力ファイルパス（Stage2/all用）")
     args = parser.parse_args()
+
+    date_slug = datetime.today().strftime("%Y%m%d")
+
+    # Stage2単独: evidence.jsonから読み込んで報告書生成
+    if args.stage == "2":
+        if not args.evidence:
+            parser.error("--stage 2 には --evidence <JSONファイル> が必要です")
+        session_info, supporter, children, child_counts, utterances_sample, evidence_by_child = load_evidence_json(args.evidence)
+        output_path = args.output or f"report_校長向け_{date_slug}.md"
+        print(f"📂 切片化結果を読み込み中: {args.evidence}")
+        _run_stage2(
+            evidence_by_child, children, session_info, supporter, output_path,
+            child_counts=child_counts, utterances_sample=utterances_sample,
+        )
+        return
+
+    # Stage1 / all: CSVが必要
+    if not args.csv:
+        parser.error("CSVファイルを指定してください（例: python3 generate_report.py mapped.csv）")
 
     session_info = {
         "date": args.date,
@@ -330,80 +509,19 @@ def main():
     print(f"👶 検出された児童: {', '.join(children)}")
     print(f"📊 総発言数: {len(rows)}件\n")
 
-    # 出力ファイル名
-    date_slug = datetime.today().strftime("%Y%m%d")
+    # Stage1: 切片化のみ
+    if args.stage == "1":
+        _run_stage1(rows, children, session_info, args.supporter, date_slug)
+        return
+
+    # all: 切片化→報告書生成を一括実行
+    _, evidence_by_child = _run_stage1(rows, children, session_info, args.supporter, date_slug)
     output_path = args.output or f"report_校長向け_{date_slug}.md"
+    _run_stage2(
+        evidence_by_child, children, session_info, args.supporter, output_path,
+        rows=rows,
+    )
 
-    lines = []
-    lines.append(f"# ASOBO 活動報告書（校長向け）")
-    lines.append(f"")
-    lines.append(f"**日付**: {session_info['date']}  ")
-    lines.append(f"**場所**: {session_info['location']}  ")
-    lines.append(f"**活動**: {session_info['activity']}  ")
-    lines.append(f"**参加児童**: {', '.join(children)}（{len(children)}名）  ")
-    lines.append(f"**支援者**: {args.supporter}  ")
-    lines.append(f"**記録生成日**: {datetime.today().strftime('%Y年%m月%d日')}  ")
-    lines.append(f"")
-    lines.append(f"---")
-    lines.append(f"")
-
-    # セッション総括
-    print("📝 セッション総括を生成中...")
-    summary = generate_session_summary(rows, children, session_info)
-    lines.append(f"## セッション総括")
-    lines.append(f"")
-    lines.append(summary)
-    lines.append(f"")
-    lines.append(f"---")
-    lines.append(f"")
-
-    # 観点別記述（児童ごと）
-    lines.append(f"## 観点別学習状況（児童別）")
-    lines.append(f"")
-
-    for i, child in enumerate(children, 1):
-        child_count = sum(1 for r in rows if r["speaker"] == child)
-
-        if child_count == 0:
-            lines.append(f"### {child}")
-            lines.append(f"※ 本セッションでの発言記録なし")
-            lines.append(f"")
-            continue
-
-        transcript = build_transcript_per_child(rows, child)
-
-        # Stage 1: 切片化
-        print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
-        evidence = extract_evidence_per_viewpoint(child, transcript)
-
-        # 中間確認: 抽出された根拠発言を表示（ハルシネーション確認用）
-        print(f"  ┌─ 切片化結果（確認してください）")
-        for v in VIEWPOINTS:
-            utterances = evidence[v]
-            print(f"  │ 【{v}】{len(utterances)}件")
-            for u in utterances:
-                print(f"  │   ・{u}")
-        print(f"  └─────────────────")
-
-        # Stage 2: 記述生成
-        print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
-        report = generate_child_report(child, evidence, session_info)
-        lines.append(report)
-        lines.append(f"")
-        lines.append(f"---")
-        lines.append(f"")
-
-    # フッター
-    lines.append(f"## 備考")
-    lines.append(f"")
-    lines.append(f"本報告書は、音声記録をWhisper（自動文字起こし）およびAI言語モデル（Ollama）で補助処理したものです。")
-    lines.append(f"記述内容は担当支援者（{args.supporter}）が確認・承認したものを正式記録とします。")
-    lines.append(f"")
-
-    # 書き出し
-    content = "\n".join(lines)
-    Path(output_path).write_text(content, encoding="utf-8")
-    print(f"\n✅ 完了: {output_path}")
 
 if __name__ == "__main__":
     main()
