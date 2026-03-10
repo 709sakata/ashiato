@@ -61,13 +61,16 @@ def build_full_transcript(rows: list[dict]) -> str:
             lines.append(f"[{row['start']}] {row['speaker']}: {row['text']}")
     return "\n".join(lines)
 
-def call_ollama(prompt: str) -> str:
-    payload = json.dumps({
+def call_ollama(prompt: str, system: str = "") -> str:
+    body: dict = {
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {"temperature": 0.3, "num_predict": 1500}
-    }).encode("utf-8")
+    }
+    if system:
+        body["system"] = system
+    payload = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         OLLAMA_URL,
@@ -105,10 +108,11 @@ def normalize_child_report(child: str, raw: str) -> str:
 
     return raw.strip()
 
-def generate_child_report(child: str, transcript: str, session_info: dict) -> str:
+def generate_child_report(child: str, transcript: str, session_info: dict, child_count: int) -> str:
     """児童1人分の観点別記述を生成"""
-    prompt = f"""あなたは小学校の教育記録を作成する専門家です。
-以下は、不登校支援活動「ASOBO」での里山体験セッションにおける、{child}さんの発言記録です。
+    system = "あなたは小学校の教育記録を作成する専門家です。指導要録の観点別学習状況の記述を、担当教員が観察した文体で正確に作成します。"
+
+    prompt = f"""以下は、不登校支援活動「ASOBO」での里山体験セッションにおける、{child}さんの発言記録です。
 
 【セッション情報】
 日付: {session_info['date']}
@@ -117,6 +121,13 @@ def generate_child_report(child: str, transcript: str, session_info: dict) -> st
 
 【{child}さんの発言記録（支援者とのやりとり含む）】
 {transcript}
+
+【この児童の総発言数: {child_count}件】
+
+【観点の定義（里山体験における解釈）】
+- 知識・技能: 自然の生き物・植物・道具（火起こし等）に関する知識の獲得や技能の習得
+- 思考・判断・表現: 自然現象への疑問・観察結果の言語化・仮説・比較・感想の表現
+- 主体的に学習に取り組む態度: 自発的な挑戦・粘り強さ・次回への意欲・他者との協力意識
 
 【指示】
 上記の記録をもとに、小学校の「指導要録」に記載する観点別学習状況の記述を作成してください。
@@ -127,7 +138,8 @@ def generate_child_report(child: str, transcript: str, session_info: dict) -> st
 - 人称は「{child}は」で統一し、「彼は」「彼女は」は使わないこと
 - 「AIが判断した」ではなく「担当教員が観察した」という文体で書くこと
 - 体言止めや箇条書きは使わず、文章で書くこと
-- 各観点の末尾に（根拠発言数: N件）を括弧書きで添えること
+- 各観点の末尾に（根拠発言数: N件）を括弧書きで添えること。Nはその観点の記述で引用・参照した発言の件数のみを数えること（総発言数{child_count}件を超えないこと）
+- 文字起こし誤りと思われる語（ひらがな・カタカナ誤変換など不自然な表現）は文脈から正しい語に解釈して記述し、誤変換をそのまま記述しないこと
 - フォーマット以外の前置きや後書きは一切出力しないこと
 
 出力フォーマット（この通りに出力すること）:
@@ -143,17 +155,31 @@ def generate_child_report(child: str, transcript: str, session_info: dict) -> st
 ### 主体的に学習に取り組む態度
 （ここに記述）
 """
-    return normalize_child_report(child, call_ollama(prompt))
+    return normalize_child_report(child, call_ollama(prompt, system=system))
+
+def _pick_representative_utterances(rows: list[dict], children: list[str], n: int = 2) -> str:
+    """各児童の代表的な発言をn件ずつ抽出してテキスト化"""
+    lines = []
+    for child in children:
+        utterances = [r["text"] for r in rows if r["speaker"] == child and r.get("text") and r["text"] != "[聞き取り不明]"]
+        # 短すぎる発言を除き、中盤から代表発言を選ぶ
+        candidates = [u for u in utterances if len(u) >= 8]
+        if not candidates:
+            candidates = utterances
+        # 均等にn件取る（先頭・末尾に偏らないよう中央付近から）
+        step = max(1, len(candidates) // (n + 1))
+        picks = [candidates[min(i * step, len(candidates) - 1)] for i in range(1, n + 1)]
+        for p in picks:
+            lines.append(f"  {child}:「{p}」")
+    return "\n".join(lines)
 
 def generate_session_summary(rows: list[dict], children: list[str], session_info: dict) -> str:
     """セッション全体サマリーを生成"""
-    # 発言統計
-    stats = {}
-    for child in children:
-        count = sum(1 for r in rows if r["speaker"] == child)
-        stats[child] = count
-
+    stats = {child: sum(1 for r in rows if r["speaker"] == child) for child in children}
     stats_text = "\n".join(f"  {k}: {v}件" for k, v in stats.items())
+    representative = _pick_representative_utterances(rows, children, n=2)
+
+    system = "あなたは小学校の教育記録を作成する専門家です。現職教員が観察した文体で、簡潔かつ教育的意義のある報告文を作成します。"
 
     prompt = f"""以下は、不登校支援活動「ASOBO」の里山体験セッションの記録です。
 
@@ -161,21 +187,24 @@ def generate_session_summary(rows: list[dict], children: list[str], session_info
 日付: {session_info['date']}
 活動場所: {session_info['location']}
 活動内容: {session_info['activity']}
-参加児童: {', '.join(children)}
+参加児童: {', '.join(children)}（{len(children)}名）
 
 【児童別発言件数】
 {stats_text}
 
+【各児童の代表的な発言】
+{representative}
+
 【指示】
 校長先生への報告書の冒頭に載せる「セッション総括」を200字程度で書いてください。
-・活動の流れ（自然探索→昼食調理→火起こし→振り返り）を簡潔に
-・特定の児童だけでなく、参加児童全体の様子として記述すること
+・活動内容（{session_info['activity']}）の流れを簡潔に含めること
+・参加した全児童（{', '.join(children)}）に均等に言及し、特定の2名だけを目立たせないこと
 ・「不登校」という言葉は使わず「学校外での学びの場」として表現
 ・現職教員が観察した文体で
 ・体験活動の教育的意義を含める
 ・前置きや後書きは不要、総括の文章のみ出力すること
 """
-    return call_ollama(prompt)
+    return call_ollama(prompt, system=system)
 
 def main():
     parser = argparse.ArgumentParser(description="あしあと 報告書生成")
@@ -241,7 +270,7 @@ def main():
             lines.append(f"")
             continue
 
-        report = generate_child_report(child, transcript, session_info)
+        report = generate_child_report(child, transcript, session_info, child_count)
         lines.append(report)
         lines.append(f"")
         lines.append(f"---")
