@@ -146,7 +146,7 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
     )
 
     prompt = f"""# 前提条件（Context）
-本作業の目的: ASOBO里山体験セッションにおける{child}さんの発言記録から、
+本作業の目的: NPO法人姫路YMCAが運営するフリースクール「あしあと」の太子遊び冒険の森ASOBO（兵庫県揖保郡太子町の里山）での体験セッションにおける{child}さんの発言記録から、
 {school_type}の指導要録（出席扱い申請用）に記載する観点別学習状況の根拠発言を特定・分類すること。
 
 # 観点の定義（Task: 里山体験における解釈）
@@ -228,7 +228,7 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
     evidence_text = "\n".join(evidence_parts)
 
     prompt = f"""# 前提条件（Context）
-目的: ASOBO里山体験セッションにおける{child}さんの根拠発言リスト（Stage1切片化済み）をもとに、
+目的: NPO法人姫路YMCAが運営するフリースクール「あしあと」の太子遊び冒険の森ASOBO（兵庫県揖保郡太子町の里山）での体験セッションにおける{child}さんの根拠発言リスト（Stage1切片化済み）をもとに、
 {school_type}への出席扱い申請用の指導要録「観点別学習状況」の記述を作成する。
 
 # セッション情報
@@ -326,13 +326,13 @@ def generate_session_summary(
     # [Persona] 学校外支援センターの公式記録補助者として役割を明確化
     # [Context] 校長向け報告書の冒頭文、出席扱い申請の公的文書
     system = (
-        "あなたは学校外学習支援センター（ASOBO）の公式記録補助者である。"
+        "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の公式記録補助者である。"
         "校長先生への活動報告書（出席扱い申請書添付用）の冒頭総括文を作成することを専門とする。"
         "与えられた【各児童の発言抜粋】に存在する事実のみを根拠に記述する。"
         "記録にない活動・様子・発言の創作・推測・補完は絶対に行わない。"
     )
 
-    prompt = f"""以下は、学校外での学習支援活動「ASOBO」の里山体験セッションの記録です。
+    prompt = f"""以下は、NPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO・兵庫県揖保郡太子町の里山）での体験セッションの記録です。
 
 【セッション情報】
 日付: {session_info['date']}
@@ -449,7 +449,7 @@ def _run_stage2(
 ) -> None:
     """evidence dictから報告書Markdownを生成して書き出す"""
     lines = []
-    lines.append(f"# ASOBO 活動報告書（校長向け）")
+    lines.append(f"# あしあと（太子遊び冒険の森ASOBO）活動報告書（校長向け）")
     lines.append(f"")
     lines.append(f"**日付**: {session_info['date']}  ")
     lines.append(f"**場所**: {session_info['location']}  ")
@@ -527,8 +527,8 @@ def main():
     parser.add_argument("--evidence", default=None,
                         help="Stage2専用: 切片化結果JSONファイルのパス")
     parser.add_argument("--date", default=datetime.today().strftime("%Y年%m月%d日"), help="セッション日付")
-    parser.add_argument("--location", default="里山フィールド", help="活動場所")
-    parser.add_argument("--activity", default="自然探索・昼食調理・火起こし体験", help="活動内容")
+    parser.add_argument("--location", default="太子遊び冒険の森ASOBO（兵庫県揖保郡太子町）", help="活動場所")
+    parser.add_argument("--activity", default="自然観察・昼食調理・火起こし体験", help="活動内容")
     parser.add_argument("--supporter", default="山田", help="支援者名（除外用）")
     parser.add_argument("--school-type", choices=["小学校", "中学校"], default="小学校", help="学校種別（デフォルト: 小学校）")
     parser.add_argument("--output", default=None, help="出力ファイルパス（Stage2/all用）")
@@ -565,8 +565,8 @@ def main():
         print(f"ℹ️  _meta.txt が見つかりません。CLI引数のセッション情報を使用します。", file=sys.stderr)
 
     default_date        = datetime.today().strftime("%Y年%m月%d日")
-    default_location    = "里山フィールド"
-    default_activity    = "自然探索・昼食調理・火起こし体験"
+    default_location    = "太子遊び冒険の森ASOBO（兵庫県揖保郡太子町）"
+    default_activity    = "自然観察・昼食調理・火起こし体験"
     default_school_type = "小学校"
 
     session_info = {
