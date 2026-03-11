@@ -8,12 +8,12 @@
 import json
 import re
 import argparse
-import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from config import MAX_SESSIONS, VIEWPOINTS
+from db import get_connection
 from utils import call_ollama, load_csv
 
 EVIDENCE_SCHEMA = {
@@ -28,68 +28,82 @@ EVIDENCE_SCHEMA = {
 
 def load_child_context_from_db(db_path: str, child: str, exclude_date: str, max_sessions: int = MAX_SESSIONS) -> dict:
     """
-    DBから児童の過去セッション履歴と現行支援計画を取得する。
+    Supabase DBから児童の過去セッション履歴と現行支援計画を取得する。
+    db_path: 後方互換のため引数として残すが Supabase 接続では使用しない
     exclude_date: 今回のセッション日付（重複参照を避ける）
     戻り値: {"plan_goals": dict | None, "history": list[dict]}
     """
-    if not Path(db_path).exists():
+    try:
+        conn = get_connection()
+    except RuntimeError:
         return {"plan_goals": None, "history": []}
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    child_row = conn.execute("SELECT id FROM children WHERE name = ?", (child,)).fetchone()
+    child_row = conn.execute("SELECT id FROM children WHERE name = %s", (child,)).fetchone()
     if not child_row:
         conn.close()
         return {"plan_goals": None, "history": []}
-    child_id = child_row["id"]
+    child_id = str(child_row["id"])
 
-    # 現行の支援計画目標を取得
+    # 現行の支援計画目標を support_plan_goals テーブルから取得
     plan_goals = None
     plan_row = conn.execute(
-        "SELECT goals_json, period_start, period_end FROM support_plans WHERE child_id = ? AND status = 'active' ORDER BY version DESC LIMIT 1",
+        "SELECT id, period_start, period_end FROM support_plans WHERE child_id = %s AND status = 'active' ORDER BY version DESC LIMIT 1",
         (child_id,),
     ).fetchone()
-    if plan_row and plan_row["goals_json"]:
-        try:
+    if plan_row:
+        goal_rows = conn.execute(
+            """SELECT vp.code, spg.goal_text
+               FROM support_plan_goals spg
+               JOIN viewpoints vp ON vp.id = spg.viewpoint_id
+               WHERE spg.support_plan_id = %s
+               ORDER BY vp.sort_order""",
+            (str(plan_row["id"]),),
+        ).fetchall()
+        if goal_rows:
+            goals_dict = {r["code"]: r["goal_text"] for r in goal_rows}
             plan_goals = {
-                "goals": json.loads(plan_row["goals_json"]),
+                "goals": goals_dict,
                 "period": f"{plan_row['period_start']} ～ {plan_row['period_end']}",
             }
-        except json.JSONDecodeError:
-            pass
 
     # 過去セッションの根拠発言サマリーを取得（今回のセッションは除外）
     sessions = conn.execute(
-        """SELECT DISTINCT s.id, s.date, s.activity
+        """SELECT DISTINCT s.id, s.date,
+                  COALESCE(at.name, s.activity_detail, '') AS activity
            FROM sessions s
            JOIN session_evidence se ON se.session_id = s.id
-           WHERE se.child_id = ? AND s.date != ?
-           ORDER BY s.date DESC LIMIT ?""",
+           LEFT JOIN activity_types at ON at.id = s.activity_type_id
+           WHERE se.child_id = %s AND s.date::TEXT != %s
+           ORDER BY s.date DESC LIMIT %s""",
         (child_id, exclude_date, max_sessions),
     ).fetchall()
 
     history = []
     for s in sessions:
         counts = conn.execute(
-            """SELECT viewpoint, COUNT(*) as cnt
-               FROM session_evidence
-               WHERE session_id = ? AND child_id = ?
-               GROUP BY viewpoint""",
-            (s["id"], child_id),
+            """SELECT vp.code AS viewpoint, COUNT(*) AS cnt
+               FROM session_evidence se
+               JOIN viewpoints vp ON vp.id = se.viewpoint_id
+               WHERE se.session_id = %s AND se.child_id = %s
+               GROUP BY vp.code""",
+            (str(s["id"]), child_id),
         ).fetchall()
         count_map = {r["viewpoint"]: r["cnt"] for r in counts}
-        # 代表的な発言を1件ずつ取得
+
         samples = {}
         for vp in VIEWPOINTS:
             row = conn.execute(
-                "SELECT utterance FROM session_evidence WHERE session_id = ? AND child_id = ? AND viewpoint = ? LIMIT 1",
-                (s["id"], child_id, vp),
+                """SELECT se.utterance FROM session_evidence se
+                   JOIN viewpoints vp ON vp.id = se.viewpoint_id
+                   WHERE se.session_id = %s AND se.child_id = %s AND vp.code = %s
+                   LIMIT 1""",
+                (str(s["id"]), child_id, vp),
             ).fetchone()
             if row:
                 samples[vp] = row["utterance"]
+
         history.append({
-            "date": s["date"],
+            "date": str(s["date"]),
             "activity": s["activity"],
             "counts": count_map,
             "samples": samples,
