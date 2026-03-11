@@ -5,7 +5,10 @@
 個別支援計画は最初に作成し、四半期ごとに蓄積データをもとに更新する。
 
 使い方:
-  # 初回計画作成（セッションデータ不要・対話式）
+  # 初回計画作成（保護者面談の文字起こしCSVから）
+  python3 generate_support_plan.py --init --child 太郎 --intake intake_mapped.csv
+
+  # 初回計画作成（対話式入力）
   python3 generate_support_plan.py --init --child 太郎
 
   # 四半期更新（蓄積セッションデータをもとに改定版を生成）
@@ -18,6 +21,7 @@
   python3 generate_support_plan.py --list
 """
 
+import csv
 import json
 import sqlite3
 import sys
@@ -116,6 +120,25 @@ def fetch_child_history(conn: sqlite3.Connection, child_id: int, max_sessions: i
     return list(reversed(history))
 
 
+def load_intake_csv(path: str) -> tuple[list[str], str]:
+    """
+    保護者面談の文字起こしCSVを読み込む。
+    戻り値: (話者リスト, 全発言テキスト)
+    """
+    rows = []
+    with open(path, encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
+
+    speakers = list(dict.fromkeys(r["speaker"] for r in rows if r.get("speaker")))
+    lines = []
+    for r in rows:
+        if r.get("text") and r["text"] != "[聞き取り不明]":
+            lines.append(f"{r['speaker']}: {r['text']}")
+    return speakers, "\n".join(lines)
+
+
 def extract_goals_json(content: str) -> dict:
     """生成された計画書から目標を抽出してJSON化（ベストエフォート）"""
     goals: dict[str, str] = {}
@@ -131,73 +154,17 @@ def extract_goals_json(content: str) -> dict:
     return goals
 
 
-# ===== 初回計画作成（対話式） =====
+# ===== 初回計画作成 =====
 
-def cmd_init(conn: sqlite3.Connection, child: str, school_type: str, db_path: Path) -> None:
-    child_id = upsert_child(conn, child)
-    existing = get_active_plan(conn, child_id)
-    if existing:
-        print(f"⚠️  {child}の個別支援計画はすでに存在します（v{existing['version']}）。")
-        ans = input("新規作成して既存をアーカイブしますか？（y/N）: ").strip().lower()
-        if ans not in ("y", "yes"):
-            print("中断しました。更新の場合は --update を使用してください。")
-            return
-
-    print(f"\n{'─'*50}")
-    print(f"  {child} の個別支援計画 — 初回作成")
-    print(f"{'─'*50}")
-    print("セッション記録がない段階でも、現在の様子・背景・目標をもとに計画を作成します。")
-    print("（Enterで項目をスキップできます）\n")
-
-    background    = input("現在の状況・背景（学校との関係、フリースクールに来た経緯など）:\n> ").strip()
-    strengths     = input("\n得意なこと・関心が高い領域:\n> ").strip()
-    challenges    = input("\n苦手なこと・支援が必要な領域:\n> ").strip()
-    goal_kn       = input(f"\n【知識・技能】の目標（例：里山の生き物や現象について自分の言葉で説明できるようになる）:\n> ").strip()
-    goal_th       = input(f"\n【思考・判断・表現】の目標（例：体験した事象について「なぜ？」と問いを持ち言語化できるようになる）:\n> ").strip()
-    goal_at       = input(f"\n【主体的に学習に取り組む態度】の目標（例：自分からやってみる場面を増やし、困っても諦めずに取り組める）:\n> ").strip()
-    support_policy = input("\n支援の方針・手立て（どんなアプローチで関わるか）:\n> ").strip()
-    period_start  = input(f"\n計画期間（開始）（例：2026年10月）: ").strip() or datetime.today().strftime("%Y年%m月")
-    period_end    = input(f"計画期間（終了）（例：2026年12月）: ").strip()
-
-    intake = {
-        "background": background, "strengths": strengths, "challenges": challenges,
-        "goals": {"知識・技能": goal_kn, "思考・判断・表現": goal_th, "主体的に学習に取り組む態度": goal_at},
-        "support_policy": support_policy,
-    }
-
-    print(f"\n✍️  個別支援計画を生成中...")
-
-    system = (
-        f"あなたは{school_type}の特別支援教育コーディネーターであり、"
-        "フリースクール「あしあと」（太子遊び冒険の森ASOBO）での体験学習を通じた"
-        "個別支援計画の作成専門家である。"
-        "提供された情報のみに基づき、具体的・行動観察可能な計画書を作成する。"
-    )
-
-    prompt = f"""# 個別支援計画（初回）作成依頼
+def _build_init_prompt(child: str, school_type: str, period_start: str, period_end: str, info_section: str) -> str:
+    return f"""# 個別支援計画（初回）作成依頼
 
 ## 対象児童
 名前: {child}
 学校種別: {school_type}
 計画期間: {period_start} ～ {period_end}
 
-## 提供された情報
-### 現在の状況・背景
-{background or "（未入力）"}
-
-### 得意なこと・関心が高い領域
-{strengths or "（未入力）"}
-
-### 苦手なこと・支援が必要な領域
-{challenges or "（未入力）"}
-
-### 設定目標
-- 【知識・技能】: {goal_kn or "（未入力）"}
-- 【思考・判断・表現】: {goal_th or "（未入力）"}
-- 【主体的に学習に取り組む態度】: {goal_at or "（未入力）"}
-
-### 支援の方針・手立て
-{support_policy or "（未入力）"}
+{info_section}
 
 ---
 
@@ -206,7 +173,7 @@ def cmd_init(conn: sqlite3.Connection, child: str, school_type: str, db_path: Pa
 以下の構成で個別支援計画書を作成してください。
 
 ## 1. 現状把握（アセスメント）
-上記の情報をもとに、{child}の現在の姿を2〜3文で整理する。
+提供された情報をもとに、{child}の現在の姿を2〜3文で整理する。
 
 ## 2. 支援目標（{period_start} ～ {period_end}）
 
@@ -236,35 +203,152 @@ def cmd_init(conn: sqlite3.Connection, child: str, school_type: str, db_path: Pa
 3. 前置き・後書きは不要、計画書の本文のみ出力する
 """
 
-    content = call_ollama(prompt, system=system)
 
-    # 既存計画をアーカイブして新規保存
+def _save_and_write(
+    conn: sqlite3.Connection,
+    child_id: int,
+    existing,
+    content: str,
+    goals_json: dict,
+    period_start: str,
+    period_end: str,
+    child: str,
+    school_type: str,
+    source_note: str = "",
+) -> None:
     if existing:
         archive_plan(conn, existing["id"])
-    goals_json = {
-        "知識・技能": goal_kn,
-        "思考・判断・表現": goal_th,
-        "主体的に学習に取り組む態度": goal_at,
-    }
     new_version = (existing["version"] + 1) if existing else 1
     save_plan(conn, child_id, new_version, content, goals_json, period_start, period_end)
     conn.commit()
 
     date_slug = datetime.today().strftime("%Y%m%d")
     out = Path(f"support_plan_{child}_v{new_version}_{date_slug}.md")
-    header = "\n".join([
+    header_lines = [
         f"# 個別支援計画 — {child}（v{new_version}）",
         f"",
         f"**作成日**: {datetime.today().strftime('%Y年%m月%d日')}  ",
         f"**計画期間**: {period_start} ～ {period_end}  ",
         f"**学校種別**: {school_type}  ",
-        f"",
-        f"---",
-        f"",
-    ])
-    out.write_text(header + content + "\n", encoding="utf-8")
+    ]
+    if source_note:
+        header_lines.append(f"**作成根拠**: {source_note}  ")
+    header_lines += ["", "---", ""]
+    out.write_text("\n".join(header_lines) + "\n" + content + "\n", encoding="utf-8")
     print(f"\n✅ 完了: {out}")
     print(f"   DBに保存しました（v{new_version}）")
+
+
+def cmd_init(
+    conn: sqlite3.Connection,
+    child: str,
+    school_type: str,
+    db_path: Path,
+    intake_csv: str | None = None,
+) -> None:
+    child_id = upsert_child(conn, child)
+    existing = get_active_plan(conn, child_id)
+    if existing:
+        print(f"⚠️  {child}の個別支援計画はすでに存在します（v{existing['version']}）。")
+        ans = input("新規作成して既存をアーカイブしますか？（y/N）: ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("中断しました。更新の場合は --update を使用してください。")
+            return
+
+    system = (
+        f"あなたは{school_type}の特別支援教育コーディネーターであり、"
+        "フリースクール「あしあと」（太子遊び冒険の森ASOBO）での体験学習を通じた"
+        "個別支援計画の作成専門家である。"
+        "提供された情報のみに基づき、具体的・行動観察可能な計画書を作成する。"
+    )
+
+    # ── intake CSV がある場合: 面談記録から自動抽出 ──────────────────────
+    if intake_csv:
+        print(f"\n{'─'*50}")
+        print(f"  {child} の個別支援計画 — 面談記録から初回作成")
+        print(f"{'─'*50}")
+        print(f"📂 面談記録を読み込み中: {intake_csv}")
+        speakers, transcript_text = load_intake_csv(intake_csv)
+        print(f"   話者: {', '.join(speakers)}（{len(speakers)}名）")
+        print(f"   発言数: {transcript_text.count(chr(10)) + 1}行")
+
+        period_start = input(f"\n計画期間（開始）（例：{datetime.today().strftime('%Y年%m月')}）: ").strip() \
+                       or datetime.today().strftime("%Y年%m月")
+        period_end   = input(f"計画期間（終了）（例：3ヶ月後）: ").strip()
+
+        supporter_name = input(f"\n支援者の名前（面談記録内の表記）: ").strip()
+        child_name_in_csv = input(
+            f"面談記録内での{child}の呼び方（例: 太郎、本人、お子さん / Enterで「{child}」）: "
+        ).strip() or child
+
+        info_section = f"""## 面談記録（保護者・本人・支援者）
+話者: {', '.join(speakers)}
+支援者: {supporter_name}
+対象: {child_name_in_csv}
+
+### 発言記録（全文）
+{transcript_text}
+
+---
+
+# 抽出指示（計画書作成前に実行すること）
+以下の順で面談記録を分析してから計画書を作成すること:
+1. {child_name_in_csv}についての発言・様子を通読する
+2. 現状・背景として語られた内容を抽出する（学校との関係、フリースクールに来た経緯、日常の様子等）
+3. 得意なこと・関心の高い領域として語られた内容を抽出する
+4. 課題・支援が必要な領域として語られた内容を抽出する
+5. 保護者・本人が希望・期待として述べた内容を抽出する
+6. 抽出した内容のみを根拠に計画書を作成する（記録にない情報の補完・創作禁止）"""
+
+        source_note = f"保護者面談記録（{Path(intake_csv).name}）"
+
+    # ── intake CSV がない場合: 対話式入力 ────────────────────────────────
+    else:
+        print(f"\n{'─'*50}")
+        print(f"  {child} の個別支援計画 — 対話式初回作成")
+        print(f"{'─'*50}")
+        print("（Enterで項目をスキップできます）\n")
+
+        background     = input("現在の状況・背景（学校との関係、フリースクールに来た経緯など）:\n> ").strip()
+        strengths      = input("\n得意なこと・関心が高い領域:\n> ").strip()
+        challenges     = input("\n苦手なこと・支援が必要な領域:\n> ").strip()
+        goal_kn        = input("\n【知識・技能】の目標:\n> ").strip()
+        goal_th        = input("\n【思考・判断・表現】の目標:\n> ").strip()
+        goal_at        = input("\n【主体的に学習に取り組む態度】の目標:\n> ").strip()
+        support_policy = input("\n支援の方針・手立て:\n> ").strip()
+        period_start   = input(f"\n計画期間（開始）（例：{datetime.today().strftime('%Y年%m月')}）: ").strip() \
+                         or datetime.today().strftime("%Y年%m月")
+        period_end     = input(f"計画期間（終了）: ").strip()
+
+        info_section = f"""## 提供された情報
+### 現在の状況・背景
+{background or "（未入力）"}
+
+### 得意なこと・関心が高い領域
+{strengths or "（未入力）"}
+
+### 苦手なこと・支援が必要な領域
+{challenges or "（未入力）"}
+
+### 設定目標
+- 【知識・技能】: {goal_kn or "（未入力）"}
+- 【思考・判断・表現】: {goal_th or "（未入力）"}
+- 【主体的に学習に取り組む態度】: {goal_at or "（未入力）"}
+
+### 支援の方針・手立て
+{support_policy or "（未入力）"}"""
+
+        source_note = "対話式入力"
+
+    print(f"\n✍️  個別支援計画を生成中...")
+    prompt = _build_init_prompt(child, school_type, period_start, period_end, info_section)
+    content = call_ollama(prompt, system=system)
+
+    goals_json = extract_goals_json(content)
+    _save_and_write(
+        conn, child_id, existing, content, goals_json,
+        period_start, period_end, child, school_type, source_note,
+    )
 
 
 # ===== 四半期更新 =====
@@ -462,6 +546,8 @@ def main():
     group.add_argument("--show",   action="store_true", help="現行計画を表示")
     group.add_argument("--list",   action="store_true", help="登録済み児童と計画状況を一覧表示")
     parser.add_argument("--child", help="対象児童の名前（--list 以外で必須）")
+    parser.add_argument("--intake", default=None, metavar="MAPPED_CSV",
+                        help="--init 専用: 保護者面談の文字起こしCSV（map_speakers.py 出力）を指定すると自動抽出")
     parser.add_argument("--school-type", choices=["小学校", "中学校"], default="小学校")
     parser.add_argument("--sessions", type=int, default=12, help="更新時に参照するセッション数（デフォルト: 12）")
     parser.add_argument("--db", default=str(DEFAULT_DB))
@@ -484,7 +570,9 @@ def main():
     conn = get_connection(db_path)
 
     if args.init:
-        cmd_init(conn, args.child, args.school_type, db_path)
+        if args.intake and not Path(args.intake).exists():
+            parser.error(f"--intake で指定したファイルが見つかりません: {args.intake}")
+        cmd_init(conn, args.child, args.school_type, db_path, intake_csv=args.intake)
     elif args.update:
         cmd_update(conn, args.child, args.sessions, db_path)
     elif args.show:
