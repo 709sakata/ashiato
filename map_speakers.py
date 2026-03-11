@@ -2,17 +2,17 @@
 import csv
 import sys
 import os
-import json
-import urllib.request
 from datetime import datetime
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen2.5:7b"
+from config import OLLAMA_TIMEOUT
+from utils import call_ollama
 
-def ollama_extract_activity(csv_text):
+
+def ollama_extract_activity(csv_text: str) -> str:
+    """発言記録から実際に行われた活動内容を抽出する。"""
     # [Persona] ASOBOプロジェクトの公式文書担当者として役割を明確化
     # [Context] 学校への出席扱い申請書という公的文書用途を明示
-    system_prompt = (
+    system = (
         "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の活動記録担当者であり、"
         "学校提出用の公式文書（出席扱い申請書）に記載する活動内容を"
         "発言記録から正確に抽出することを専門とする。"
@@ -38,20 +38,10 @@ def ollama_extract_activity(csv_text):
 発言記録：
 {csv_text}
 """
-    payload = json.dumps({
-        "model": MODEL,
-        "prompt": prompt,
-        "system": system_prompt,
-        "stream": False,
-        "options": {"temperature": 0.1}
-    }).encode()
+    return call_ollama(prompt, system=system, extra_options={"temperature": 0.1})
 
-    req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as res:
-        result = json.loads(res.read())
-        return result["response"].strip()
 
-def map_speakers(input_csv, output_csv=None):
+def map_speakers(input_csv: str, output_csv: str | None = None) -> tuple[str, str]:
     rows = []
     speakers = []
     with open(input_csv, encoding='utf-8-sig') as f:
@@ -100,7 +90,7 @@ def map_speakers(input_csv, output_csv=None):
         if not activity:
             activity = suggested
     except Exception as e:
-        print(f"⚠️  AI抽出失敗（{e}）、手動入力してください")
+        print(f"[WARNING] AI抽出失敗（{e}）。手動で入力してください。", file=sys.stderr)
         activity = input("活動内容（例：自然観察・虫採り）: ").strip()
 
     if output_csv is None:
