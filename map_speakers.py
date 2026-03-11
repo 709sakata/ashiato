@@ -96,11 +96,29 @@ def map_speakers(input_csv, output_csv=None):
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         output_csv = f"{base}_mapped_{ts}.csv"
 
+    # 匿名化オプション
+    print("\n─" * 50)
+    anon_input = input("報告書用に児童名を匿名化しますか？（y/N）: ").strip().lower()
+    anonymize = anon_input in ("y", "yes", "はい")
+    anon_mapping: dict[str, str] = {}  # 実名 → 匿名コード
+    if anonymize:
+        supporter_name = input("支援者の名前（匿名化から除外）: ").strip()
+        code_index = 0
+        code_labels = [chr(ord("A") + i) for i in range(26)]
+        for name in mapping.values():
+            if name and name != supporter_name and name not in anon_mapping:
+                anon_mapping[name] = f"児童{code_labels[code_index]}"
+                code_index += 1
+        print("  匿名化マッピング:")
+        for real, code in anon_mapping.items():
+            print(f"    {real} → {code}")
+
     with open(output_csv, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['start','end','speaker','text'])
         writer.writeheader()
         for row in rows:
-            row['speaker'] = mapping.get(row['speaker'], row['speaker'])
+            name = mapping.get(row['speaker'], row['speaker'])
+            row['speaker'] = anon_mapping.get(name, name) if anonymize else name
             writer.writerow(row)
 
     meta_path = output_csv.replace('.csv', '_meta.txt')
@@ -112,6 +130,10 @@ def map_speakers(input_csv, output_csv=None):
         f.write("話者マッピング:\n")
         for orig, name in mapping.items():
             f.write(f"  {orig} → {name}\n")
+        if anonymize:
+            f.write("匿名化マッピング:\n")
+            for real, code in anon_mapping.items():
+                f.write(f"  {real} → {code}\n")
 
     print(f"\n✅ 完了: {output_csv}")
     print(f"   メタ情報: {meta_path}")

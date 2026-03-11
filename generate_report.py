@@ -83,12 +83,12 @@ def build_full_transcript(rows: list[dict]) -> str:
             lines.append(f"[{row['start']}] {row['speaker']}: {row['text']}")
     return "\n".join(lines)
 
-def call_ollama(prompt: str, system: str = "", num_predict: int = -1, format: dict | None = None) -> str:
+def call_ollama(prompt: str, system: str = "", num_predict: int = -1, format: dict | None = None, extra_options: dict | None = None) -> str:
     body: dict = {
         "model": MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.3, "num_predict": num_predict}
+        "options": {"temperature": 0.3, "num_predict": num_predict, **(extra_options or {})}
     }
     if system:
         body["system"] = system
@@ -170,7 +170,8 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
 - 発言テキストは一字一句そのまま記録する（要約・編集・補完・解釈禁止）
 - 発言の意図・理由が記録内で明言されていない場合は推測で補完しない
 - 「わからない」「おそらく」などのニュアンスが含まれる発言はそのまま記録する
-- 1つの発言が複数の観点に該当する場合は、それぞれに記載する（複数所属OK）
+- 1つの発言は最も当てはまる観点1つにのみ分類する（複数観点への重複分類禁止）
+- 4語以下の短い相槌・返事（「うん」「そう」「え」「はい」「わかった」等）は除外する
 - どの観点にも該当しない発言は除外する
 - 該当発言が0件の観点は空配列にする
 """
@@ -195,11 +196,12 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
         "この記録は学校への出席扱い申請に使用される公式文書の下書きである。"
     )
 
-    # 観点別根拠発言テキストを構築（件数を明示）
+    # 観点別根拠発言テキストを構築（件数はPythonで確定）
+    evidence_counts = {v: len(evidence[v]) for v in VIEWPOINTS}
     evidence_parts = []
     for v in VIEWPOINTS:
         utterances = evidence[v]
-        evidence_parts.append(f"### {v}（{len(utterances)}件）")
+        evidence_parts.append(f"### {v}（{evidence_counts[v]}件）")
         if utterances:
             for u in utterances:
                 evidence_parts.append(f"- 「{u}」")
@@ -234,7 +236,8 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
 - 人称は「{child}は」で統一し、「彼は」「彼女は」は使わない
 - 支援者が実際に観察した事実として書く（「〜した」「〜と発言した」「〜と述べた」等）
 - 体言止めや箇条書きは使わず、文章で書く
-- 各観点の末尾に（根拠発言数: N件）を括弧書きで添える。Nは根拠発言リストの括弧内の件数をそのまま記載する
+- 各観点の末尾に（根拠発言数: N件）を括弧書きで添える。Nは以下の確定値を使うこと:
+  知識・技能: {evidence_counts['知識・技能']}件 / 思考・判断・表現: {evidence_counts['思考・判断・表現']}件 / 主体的に学習に取り組む態度: {evidence_counts['主体的に学習に取り組む態度']}件
 - 明らかな音声認識の変換誤り（例：固有名詞の当て字）は自然な語に修正してよいが、発言の意図・内容・ニュアンスを変える解釈は行わないこと
 - 前置きや後書きは出力しない
 
@@ -243,15 +246,18 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
 ## {child}
 
 ### 知識・技能
-（ここに記述）
+（ここに記述）（根拠発言数: {evidence_counts['知識・技能']}件）
 
 ### 思考・判断・表現
-（ここに記述）
+（ここに記述）（根拠発言数: {evidence_counts['思考・判断・表現']}件）
 
 ### 主体的に学習に取り組む態度
-（ここに記述）
+（ここに記述）（根拠発言数: {evidence_counts['主体的に学習に取り組む態度']}件）
 """
-    return normalize_child_report(child, call_ollama(prompt, system=system, num_predict=2000))
+    return normalize_child_report(child, call_ollama(
+        prompt, system=system, num_predict=2000,
+        extra_options={"repeat_penalty": 1.1, "top_k": 20},
+    ))
 
 def _pick_representative_utterances(rows: list[dict], children: list[str], n: int = 2) -> str:
     """各児童の代表的な発言をn件ずつ抽出してテキスト化"""
@@ -313,13 +319,21 @@ def generate_session_summary(
 {representative}
 
 【指示】
-校長先生への報告書の冒頭に載せる「セッション総括」を150〜250字程度で書いてください。
-・【各児童の発言抜粋】に記載された内容のみを根拠に活動を描写すること（記録にない活動・様子の創作禁止）
-・活動内容（{session_info['activity']}）の範囲内で簡潔に述べること
-・参加した全児童（{', '.join(children)}）に均等に言及すること
+校長先生への報告書の冒頭に載せる「セッション総括」を作成してください。
+
+【構成（この順で書くこと）】
+1. 書き出し文: セッション全体の活動概況を1文
+2. 各児童の観察文: 以下の児童それぞれについて1文ずつ（省略・まとめ禁止）
+{chr(10).join(f"   - {c}について発言抜粋に基づく観察1文" for c in children)}
+3. まとめ文: 活動全体の意義・様子を1文
+
+【ルール】
+・各児童（{', '.join(children)}）に必ず1文ずつ言及すること（「〜と〜は」でまとめる省略禁止）
+・【各児童の発言抜粋】に記載された内容のみを根拠に記述すること（創作禁止）
+・活動内容（{session_info['activity']}）の範囲内で述べること
 ・「不登校」という言葉は使わず「学校外での学びの場」として表現
-・支援者が観察した事実として書くこと
-・前置きや後書きは不要、総括の文章のみ出力すること
+・支援者が観察した事実として書くこと（「〜する様子が見られた」等）
+・前置き・後書きは不要、総括の文章のみ出力すること
 """
     return call_ollama(prompt, system=system, num_predict=500)
 
