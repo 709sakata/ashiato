@@ -165,6 +165,26 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
 【該当例】「もう1回やってみる」「次は自分でやりたい」「〇〇くんも一緒にやろう」
 【非該当例】支援者に促されて行動した旨のみが記録されている発言
 
+# 境界例と判断推論（グレーゾーン対応）
+複数の観点に当てはまりそうな発言は、以下の思考チェーンで分類する。
+
+【境界例1】「やった！火起こしできた！これ難しかったんだよな」
+→ 感想だけか？ → No（「できた」という技能達成を含む）
+→ 知識・技能か？ → Yes（火起こし技能の習得・成功を示す）
+→ 主体的に学習か？ → 意欲も感じるが技能習得が主軸
+→ 結論: 知識・技能 に分類
+
+【境界例2】「もう1回やってみる！絶対できるようになりたい」
+→ 技能の内容か？ → No（具体的な技能内容の言及なし）
+→ 思考・判断か？ → No（疑問・考察でなく意欲の表明）
+→ 主体的に学習か？ → Yes（継続意欲・再挑戦の意志を明言）
+→ 結論: 主体的に学習に取り組む態度 に分類
+
+【迷った場合の判断優先順位（tiebreaker）】
+具体的な技能・知識の内容を示す → 知識・技能
+疑問・気づき・判断を言語化している → 思考・判断・表現
+継続意欲・挑戦・協力の意志を示す → 主体的に学習に取り組む態度
+
 # {child}さんの発言記録（支援者とのやりとり含む）
 {transcript}
 
@@ -190,7 +210,8 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
   "主体的に学習に取り組む態度": ["該当する発言をそのまま記載", "..."]
 }}
 """
-    raw = call_ollama(prompt, system=system, num_predict=-1, format=EVIDENCE_SCHEMA)
+    raw = call_ollama(prompt, system=system, num_predict=-1, format=EVIDENCE_SCHEMA,
+                      extra_options={"temperature": 0.1})
     try:
         parsed = json.loads(raw)
         return {v: [u for u in parsed.get(v, []) if u] for v in VIEWPOINTS}
@@ -254,7 +275,13 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
    - 2文目: その事実から観察できること（「〜する様子が見られた」「〜が認められた」）
    - 3文目（任意）: 追加の根拠発言がある場合、補足として記述
 4. 根拠発言が「なし」の観点は「本セッションの記録からは確認できなかった」と記述する
-5. 全観点の記述が完了したら成果物を出力する
+5. 全観点の記述が完了したら、出力前に以下を確認する
+   【出力前チェックリスト（全て□をチェックしてから出力）】
+   □ 根拠発言リストにない事実を記述していないか？
+   □ 人称は「{child}は」で統一されているか？（「彼/彼女」禁止）
+   □ 各観点末尾に（根拠発言数: N件）を括弧書きで記載したか？
+   □ 前置き・後書きを出力していないか？
+6. チェック完了後、成果物を出力する
 
 # 制約ルール（すべて厳守する）
 1. 根拠発言リストに存在しない事実は絶対に記述しない（創作・推測・補完禁止）
@@ -332,6 +359,12 @@ def generate_session_summary(
         "記録にない活動・様子・発言の創作・推測・補完は絶対に行わない。"
     )
 
+    # 各児童のスロット行を動的に生成（fill-in-the-blank 形式）
+    child_slot_lines = "\n".join(
+        f"{c}は「（{c}の発言抜粋から1つ引用）」と発言するなど、（観察した事実を1文で）"
+        for c in children
+    )
+
     prompt = f"""以下は、NPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO・兵庫県揖保郡太子町の里山）での体験セッションの記録です。
 
 【セッション情報】
@@ -346,30 +379,22 @@ def generate_session_summary(
 【各児童の発言抜粋（これが根拠となる唯一の記録）】
 {representative}
 
-【総括例（このスタイルで書くこと）】
-{session_info['date']}、{session_info['location']}にて{session_info['activity']}を実施した。
-{children[0]}は「〜」と発言するなど、積極的に活動に参加する様子が見られた。
-（各児童1文ずつ続く）
-活動全体を通じ、学習指導要領に沿った体験学習の機会となった。
+【出力フォーマット（このテンプレートの全スロットを必ず埋めること）】
+以下のテンプレートの（　）内を埋めて出力すること。スロットの順序・数は絶対に変えないこと。
 
-【指示】
-校長先生への報告書の冒頭に載せる「セッション総括」を作成してください。
+{session_info['date']}、{session_info['location']}にて{session_info['activity']}を実施した。（活動全体の概況を補足する場合はここに続ける）
+{child_slot_lines}
+活動全体を通じ、（この体験の教育的意義・参加児童の様子を1文で締めくくる）
 
-【構成（この順で書くこと）】
-1. 書き出し文: セッション全体の活動概況を1文
-2. 各児童の観察文: 以下の児童それぞれについて1文ずつ（省略・まとめ禁止）
-{chr(10).join(f"   - {c}について発言抜粋に基づく観察1文" for c in children)}
-3. まとめ文: 活動全体の意義・様子を1文
-
-【制約ルール】
-1. 各児童（{', '.join(children)}）に必ず1文ずつ言及すること（「〜と〜は」でまとめる省略禁止）
+【制約ルール（必ず全て遵守すること）】
+1. テンプレートの全スロットを埋めること（対象: {', '.join(children)} — 計{len(children)}名、一人も省略・統合禁止）
 2. 【各児童の発言抜粋】に記載された内容のみを根拠に記述すること（創作・推測禁止）
 3. 活動内容（{session_info['activity']}）の範囲内で述べること
 4. 「不登校」という言葉は使わず「学校外での学びの場」として表現
 5. 支援者が観察した事実として書くこと（「〜する様子が見られた」「〜と発言した」等）
 6. 前置き・後書きは不要、総括の文章のみ出力すること
 """
-    return call_ollama(prompt, system=system, num_predict=500)
+    return call_ollama(prompt, system=system, num_predict=700)
 
 def save_evidence_json(
     evidence_by_child: dict[str, dict[str, list[str]]],
