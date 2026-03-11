@@ -9,6 +9,7 @@ import csv
 import sys
 import json
 import argparse
+import sqlite3
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -33,6 +34,106 @@ EVIDENCE_SCHEMA = {
     },
     "required": ["知識・技能", "思考・判断・表現", "主体的に学習に取り組む態度"],
 }
+
+def load_child_context_from_db(db_path: str, child: str, exclude_date: str, max_sessions: int = 4) -> dict:
+    """
+    DBから児童の過去セッション履歴と現行支援計画を取得する。
+    exclude_date: 今回のセッション日付（重複参照を避ける）
+    戻り値: {"plan_goals": dict | None, "history": list[dict]}
+    """
+    if not Path(db_path).exists():
+        return {"plan_goals": None, "history": []}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    child_row = conn.execute("SELECT id FROM children WHERE name = ?", (child,)).fetchone()
+    if not child_row:
+        conn.close()
+        return {"plan_goals": None, "history": []}
+    child_id = child_row["id"]
+
+    # 現行の支援計画目標を取得
+    plan_goals = None
+    plan_row = conn.execute(
+        "SELECT goals_json, period_start, period_end FROM support_plans WHERE child_id = ? AND status = 'active' ORDER BY version DESC LIMIT 1",
+        (child_id,),
+    ).fetchone()
+    if plan_row and plan_row["goals_json"]:
+        try:
+            plan_goals = {
+                "goals": json.loads(plan_row["goals_json"]),
+                "period": f"{plan_row['period_start']} ～ {plan_row['period_end']}",
+            }
+        except json.JSONDecodeError:
+            pass
+
+    # 過去セッションの根拠発言サマリーを取得（今回のセッションは除外）
+    sessions = conn.execute(
+        """SELECT DISTINCT s.id, s.date, s.activity
+           FROM sessions s
+           JOIN session_evidence se ON se.session_id = s.id
+           WHERE se.child_id = ? AND s.date != ?
+           ORDER BY s.date DESC LIMIT ?""",
+        (child_id, exclude_date, max_sessions),
+    ).fetchall()
+
+    history = []
+    for s in sessions:
+        counts = conn.execute(
+            """SELECT viewpoint, COUNT(*) as cnt
+               FROM session_evidence
+               WHERE session_id = ? AND child_id = ?
+               GROUP BY viewpoint""",
+            (s["id"], child_id),
+        ).fetchall()
+        count_map = {r["viewpoint"]: r["cnt"] for r in counts}
+        # 代表的な発言を1件ずつ取得
+        samples = {}
+        for vp in VIEWPOINTS:
+            row = conn.execute(
+                "SELECT utterance FROM session_evidence WHERE session_id = ? AND child_id = ? AND viewpoint = ? LIMIT 1",
+                (s["id"], child_id, vp),
+            ).fetchone()
+            if row:
+                samples[vp] = row["utterance"]
+        history.append({
+            "date": s["date"],
+            "activity": s["activity"],
+            "counts": count_map,
+            "samples": samples,
+        })
+
+    conn.close()
+    history.reverse()  # 古い順
+    return {"plan_goals": plan_goals, "history": history}
+
+
+def build_context_section(child: str, context: dict) -> str:
+    """過去履歴と支援計画をプロンプト用テキストに変換"""
+    parts = []
+
+    if context.get("plan_goals"):
+        pg = context["plan_goals"]
+        parts.append(f"# 個別支援計画（現行 / {pg['period']}）の目標")
+        for vp, goal in pg["goals"].items():
+            if goal:
+                parts.append(f"  ■ {vp}: {goal}")
+        parts.append("")
+
+    if context.get("history"):
+        parts.append(f"# {child}の過去セッション履歴（直近{len(context['history'])}件）")
+        for s in context["history"]:
+            count_str = " / ".join(
+                f"{vp[:4]}:{s['counts'].get(vp, 0)}件" for vp in VIEWPOINTS
+            )
+            parts.append(f"  【{s['date']} {s['activity'][:20]}】{count_str}")
+            for vp, sample in s.get("samples", {}).items():
+                parts.append(f"    ・{vp[:4]}:「{sample}」")
+        parts.append("")
+
+    return "\n".join(parts)
+
 
 def load_meta_txt(path: str) -> dict:
     """map_speakers.py が生成する _meta.txt を読み込んで session_info dict に変換"""
@@ -221,7 +322,13 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
         return {v: [] for v in VIEWPOINTS}
 
 
-def generate_child_report(child: str, evidence: dict[str, list[str]], session_info: dict) -> str:
+def generate_child_report(
+    child: str,
+    evidence: dict[str, list[str]],
+    session_info: dict,
+    *,
+    db_context: dict | None = None,
+) -> str:
     """Stage 2 - 記述生成: 切片化済みの根拠発言リストをもとに観点別記述を作成"""
     school_type = session_info.get("school_type", "小学校")
 
@@ -248,6 +355,18 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
             evidence_parts.append("- （根拠発言なし）")
     evidence_text = "\n".join(evidence_parts)
 
+    # 過去履歴・支援計画のコンテキスト（DBがある場合のみ）
+    context_section = ""
+    continuity_instruction = ""
+    if db_context and (db_context.get("plan_goals") or db_context.get("history")):
+        context_section = "# 参考情報（記述の文脈として使用）\n" + build_context_section(child, db_context)
+        continuity_instruction = (
+            "8. 参考情報（過去履歴・支援計画）は記述の「文脈」として活用し、"
+            "今回の根拠発言と自然につながる流れで書くこと。"
+            "ただし参考情報の内容を根拠として使ってはならない（今回の根拠発言が唯一の根拠）。"
+            "成長の継続が今回の発言からも確認できる場合は「引き続き」「継続して」等の表現を使ってよい。"
+        )
+
     prompt = f"""# 前提条件（Context）
 目的: NPO法人姫路YMCAが運営するフリースクール「あしあと」の太子遊び冒険の森ASOBO（兵庫県揖保郡太子町の里山）での体験セッションにおける{child}さんの根拠発言リスト（Stage1切片化済み）をもとに、
 {school_type}への出席扱い申請用の指導要録「観点別学習状況」の記述を作成する。
@@ -257,7 +376,8 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
 活動場所: {session_info['location']}
 活動内容: {session_info['activity']}
 
-# 観点別根拠発言リスト（これのみを使用すること）
+{context_section}
+# 観点別根拠発言リスト（今回のセッション・これのみが根拠）
 {evidence_text}
 
 # 記述例（Output: このスタイルで書くこと）
@@ -293,6 +413,7 @@ def generate_child_report(child: str, evidence: dict[str, list[str]], session_in
    知識・技能: {evidence_counts['知識・技能']}件 / 思考・判断・表現: {evidence_counts['思考・判断・表現']}件 / 主体的に学習に取り組む態度: {evidence_counts['主体的に学習に取り組む態度']}件
 6. 明らかな音声認識の変換誤り（例：固有名詞の当て字）は自然な語に修正してよいが、発言の意図・内容・ニュアンスを変える解釈は行わないこと
 7. 前置きや後書きは出力しない
+{continuity_instruction}
 
 # 成果物のフォーマット（この通りに出力すること）
 
@@ -471,6 +592,7 @@ def _run_stage2(
     rows: list[dict] | None = None,
     child_counts: dict[str, int] | None = None,
     utterances_sample: str | None = None,
+    db_path: str | None = None,
 ) -> None:
     """evidence dictから報告書Markdownを生成して書き出す"""
     lines = []
@@ -512,8 +634,17 @@ def _run_stage2(
             lines.append(f"")
             continue
 
+        # DBがあれば過去履歴・支援計画を参照コンテキストとして取得
+        db_context = None
+        if db_path:
+            db_context = load_child_context_from_db(db_path, child, exclude_date=session_info["date"])
+            if db_context.get("plan_goals") or db_context.get("history"):
+                history_count = len(db_context.get("history", []))
+                has_plan = bool(db_context.get("plan_goals"))
+                print(f"  📚 {child}: 過去{history_count}件の履歴{'・支援計画' if has_plan else ''}を参照")
+
         print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
-        report = generate_child_report(child, evidence, session_info)
+        report = generate_child_report(child, evidence, session_info, db_context=db_context)
         lines.append(report)
         lines.append(f"")
         lines.append(f"---")
@@ -557,6 +688,8 @@ def main():
     parser.add_argument("--supporter", default="山田", help="支援者名（除外用）")
     parser.add_argument("--school-type", choices=["小学校", "中学校"], default="小学校", help="学校種別（デフォルト: 小学校）")
     parser.add_argument("--output", default=None, help="出力ファイルパス（Stage2/all用）")
+    parser.add_argument("--db", default=None, metavar="DB_PATH",
+                        help="DBパスを指定すると過去履歴・支援計画を報告書に反映（例: ./db/ashiato.db）")
     args = parser.parse_args()
 
     date_slug = datetime.today().strftime("%Y%m%d")
@@ -573,6 +706,7 @@ def main():
         _run_stage2(
             evidence_by_child, children, session_info, supporter, output_path,
             child_counts=child_counts, utterances_sample=utterances_sample,
+            db_path=args.db,
         )
         return
 
@@ -617,7 +751,7 @@ def main():
     output_path = args.output or f"report_校長向け_{date_slug}.md"
     _run_stage2(
         evidence_by_child, children, session_info, args.supporter, output_path,
-        rows=rows,
+        rows=rows, db_path=args.db,
     )
 
 

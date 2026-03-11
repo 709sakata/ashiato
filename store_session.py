@@ -45,8 +45,24 @@ CREATE TABLE IF NOT EXISTS session_evidence (
     utterance  TEXT NOT NULL
 );
 
+-- 個別支援計画（バージョン管理付き）
+-- status: active（現行） / archived（過去版）
+CREATE TABLE IF NOT EXISTS support_plans (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id     INTEGER NOT NULL REFERENCES children(id),
+    version      INTEGER NOT NULL DEFAULT 1,
+    period_start TEXT,
+    period_end   TEXT,
+    content      TEXT NOT NULL,  -- Markdown 本文
+    goals_json   TEXT,           -- JSON: {"知識・技能": "目標...", ...} （報告書参照用）
+    status       TEXT NOT NULL DEFAULT 'active',
+    created_at   TEXT NOT NULL,
+    UNIQUE(child_id, version)
+);
+
 CREATE INDEX IF NOT EXISTS idx_evidence_child ON session_evidence(child_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_session ON session_evidence(session_id);
+CREATE INDEX IF NOT EXISTS idx_plans_child ON support_plans(child_id);
 """
 
 
