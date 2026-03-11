@@ -10,11 +10,18 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5:7b"
 
 def ollama_extract_activity(csv_text):
+    system_prompt = (
+        "あなたは活動記録の抽出担当者です。"
+        "発言記録から実際に行われた活動のみを事実として抽出します。"
+        "記録に存在しない活動は絶対に含めません。"
+    )
     prompt = f"""以下はASOBOプロジェクトの里山活動セッションの発言記録です。
-この記録から、実際に行われた活動内容を簡潔に抽出してください。
+この記録から、実際に行われた活動内容のみを抽出してください。
 
-出力形式：「自然観察・虫採り・植物観察」のように「・」区切りで3〜5項目。
-余計な説明は不要です。活動内容のみを1行で出力してください。
+出力形式：「自然観察・虫採り・植物観察」のように「・」区切りで2〜6項目。
+- 発言記録に明確に存在する活動のみ記載すること
+- 「〜したい」「〜するかも」等の予定・希望は含めないこと
+- 活動内容のみを1行で出力すること（説明・前置き不要）
 
 発言記録：
 {csv_text}
@@ -22,7 +29,9 @@ def ollama_extract_activity(csv_text):
     payload = json.dumps({
         "model": MODEL,
         "prompt": prompt,
-        "stream": False
+        "system": system_prompt,
+        "stream": False,
+        "options": {"temperature": 0.1}
     }).encode()
 
     req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
@@ -66,6 +75,8 @@ def map_speakers(input_csv, output_csv=None):
     print("─" * 50)
     date     = input("活動日（例：2026年10月18日）: ").strip()
     location = input("活動場所（例：里山フィールド・姫路市）: ").strip()
+    school_type_input = input("学校種別（小学校/中学校、Enterで小学校）: ").strip()
+    school_type = school_type_input if school_type_input in ("小学校", "中学校") else "小学校"
 
     # LLMで活動内容を抽出
     print("\n⏳ 活動内容をAIが抽出中...")
@@ -85,11 +96,29 @@ def map_speakers(input_csv, output_csv=None):
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         output_csv = f"{base}_mapped_{ts}.csv"
 
+    # 匿名化オプション
+    print("\n─" * 50)
+    anon_input = input("報告書用に児童名を匿名化しますか？（y/N）: ").strip().lower()
+    anonymize = anon_input in ("y", "yes", "はい")
+    anon_mapping: dict[str, str] = {}  # 実名 → 匿名コード
+    if anonymize:
+        supporter_name = input("支援者の名前（匿名化から除外）: ").strip()
+        code_index = 0
+        code_labels = [chr(ord("A") + i) for i in range(26)]
+        for name in mapping.values():
+            if name and name != supporter_name and name not in anon_mapping:
+                anon_mapping[name] = f"児童{code_labels[code_index]}"
+                code_index += 1
+        print("  匿名化マッピング:")
+        for real, code in anon_mapping.items():
+            print(f"    {real} → {code}")
+
     with open(output_csv, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['start','end','speaker','text'])
         writer.writeheader()
         for row in rows:
-            row['speaker'] = mapping.get(row['speaker'], row['speaker'])
+            name = mapping.get(row['speaker'], row['speaker'])
+            row['speaker'] = anon_mapping.get(name, name) if anonymize else name
             writer.writerow(row)
 
     meta_path = output_csv.replace('.csv', '_meta.txt')
@@ -97,9 +126,14 @@ def map_speakers(input_csv, output_csv=None):
         f.write(f"活動日: {date}\n")
         f.write(f"場所: {location}\n")
         f.write(f"活動内容: {activity}\n")
+        f.write(f"学校種別: {school_type}\n")
         f.write("話者マッピング:\n")
         for orig, name in mapping.items():
             f.write(f"  {orig} → {name}\n")
+        if anonymize:
+            f.write("匿名化マッピング:\n")
+            for real, code in anon_mapping.items():
+                f.write(f"  {real} → {code}\n")
 
     print(f"\n✅ 完了: {output_csv}")
     print(f"   メタ情報: {meta_path}")
