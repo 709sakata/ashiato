@@ -13,12 +13,12 @@ def ollama_extract_activity(csv_text):
     # [Persona] ASOBOプロジェクトの公式文書担当者として役割を明確化
     # [Context] 学校への出席扱い申請書という公的文書用途を明示
     system_prompt = (
-        "あなたはASOBOプロジェクトの活動記録担当者であり、"
+        "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の活動記録担当者であり、"
         "学校提出用の公式文書（出席扱い申請書）に記載する活動内容を"
         "発言記録から正確に抽出することを専門とする。"
         "根拠のない情報の追加・推測・創作は絶対に行わない。"
     )
-    prompt = f"""以下はASOBOプロジェクトの里山活動セッションの発言記録です。
+    prompt = f"""以下はNPO法人姫路YMCAが運営するフリースクール「あしあと」の太子遊び冒険の森ASOBO（兵庫県揖保郡太子町の里山）での体験セッションの発言記録です。
 この記録から、実際に行われた活動内容のみを抽出してください。
 
 【判断ステップ（この順で思考すること）】
@@ -86,7 +86,7 @@ def map_speakers(input_csv, output_csv=None):
     print("セッション情報")
     print("─" * 50)
     date     = input("活動日（例：2026年10月18日）: ").strip()
-    location = input("活動場所（例：里山フィールド・姫路市）: ").strip()
+    location = input("活動場所（例：太子遊び冒険の森ASOBO・兵庫県揖保郡太子町）: ").strip()
     school_type_input = input("学校種別（小学校/中学校、Enterで小学校）: ").strip()
     school_type = school_type_input if school_type_input in ("小学校", "中学校") else "小学校"
 
