@@ -16,7 +16,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-DEFAULT_DB = Path(__file__).parent / "db" / "ashiato.db"
+from config import DEFAULT_DB
 
 # ===== スキーマ定義 =====
 
@@ -164,7 +164,7 @@ def show_summary(db_path: Path) -> None:
     conn.close()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="evidence.json をDBに蓄積")
     parser.add_argument("evidence", nargs="?", help="evidence_YYYYMMDD.json のパス")
     parser.add_argument("--db", default=str(DEFAULT_DB), help=f"DBファイルのパス（デフォルト: {DEFAULT_DB}）")

@@ -26,37 +26,11 @@ import json
 import sqlite3
 import sys
 import argparse
-import urllib.request
-import urllib.error
 from pathlib import Path
 from datetime import datetime, date
-from store_session import DEFAULT_DB, get_connection, upsert_child
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen2.5:7b"
-VIEWPOINTS = ["知識・技能", "思考・判断・表現", "主体的に学習に取り組む態度"]
-
-
-def call_ollama(prompt: str, system: str = "", num_predict: int = 3000) -> str:
-    body = {
-        "model": MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.3, "num_predict": num_predict, "repeat_penalty": 1.1},
-    }
-    if system:
-        body["system"] = system
-    payload = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        OLLAMA_URL, data=payload,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return json.loads(resp.read().decode("utf-8")).get("response", "").strip()
-    except urllib.error.URLError as e:
-        print(f"[ERROR] Ollama接続失敗: {e}", file=sys.stderr)
-        sys.exit(1)
+from config import MAX_SESSIONS, VIEWPOINTS, DEFAULT_DB
+from store_session import get_connection, upsert_child
+from utils import call_ollama
 
 
 # ===== DB操作 =====
@@ -92,7 +66,7 @@ def save_plan(
     return cur.lastrowid
 
 
-def fetch_child_history(conn: sqlite3.Connection, child_id: int, max_sessions: int) -> list[dict]:
+def fetch_child_history(conn: sqlite3.Connection, child_id: int, max_sessions: int = MAX_SESSIONS) -> list[dict]:
     sessions = conn.execute(
         """SELECT DISTINCT s.id, s.date, s.activity, s.location, s.school_type
            FROM sessions s
@@ -121,36 +95,48 @@ def fetch_child_history(conn: sqlite3.Connection, child_id: int, max_sessions: i
 
 
 def load_intake_csv(path: str) -> tuple[list[str], str]:
-    """
-    保護者面談の文字起こしCSVを読み込む。
+    """保護者面談の文字起こしCSVを読み込む。
     戻り値: (話者リスト, 全発言テキスト)
     """
-    rows = []
+    rows: list[dict] = []
     with open(path, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             rows.append(row)
 
     speakers = list(dict.fromkeys(r["speaker"] for r in rows if r.get("speaker")))
-    lines = []
-    for r in rows:
-        if r.get("text") and r["text"] != "[聞き取り不明]":
-            lines.append(f"{r['speaker']}: {r['text']}")
+    lines = [
+        f"{r['speaker']}: {r['text']}"
+        for r in rows
+        if r.get("text") and r["text"] != "[聞き取り不明]"
+    ]
     return speakers, "\n".join(lines)
 
 
-def extract_goals_json(content: str) -> dict:
-    """生成された計画書から目標を抽出してJSON化（ベストエフォート）"""
+def extract_goals_json(content: str) -> dict[str, str]:
+    """生成された計画書から観点別目標を抽出してJSON化（ベストエフォート）。
+
+    各観点の見出し行（# を含む行）を探し、直後の非空行を目標テキストとして採用する。
+    抽出できなかった観点は空文字で補完する。
+    """
     goals: dict[str, str] = {}
-    current_vp = None
-    for line in content.splitlines():
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
         for vp in VIEWPOINTS:
-            if vp in line and line.strip().startswith("#"):
-                current_vp = vp
+            if vp in stripped:
+                # 見出しの直後（最大5行以内）から最初の非空・非見出し行を目標として採用
+                for j in range(i + 1, min(i + 6, len(lines))):
+                    candidate = lines[j].strip().lstrip("・- ")
+                    if candidate and not candidate.startswith("#"):
+                        goals[vp] = candidate
+                        break
                 break
-        if current_vp and line.strip() and not line.strip().startswith("#"):
-            if current_vp not in goals:
-                goals[current_vp] = line.strip().lstrip("・- ")
+    # 抽出できなかった観点は空文字で補完
+    for vp in VIEWPOINTS:
+        goals.setdefault(vp, "")
     return goals
 
 
@@ -342,7 +328,7 @@ def cmd_init(
 
     print(f"\n✍️  個別支援計画を生成中...")
     prompt = _build_init_prompt(child, school_type, period_start, period_end, info_section)
-    content = call_ollama(prompt, system=system)
+    content = call_ollama(prompt, system=system, num_predict=3000, extra_options={"repeat_penalty": 1.1})
 
     goals_json = extract_goals_json(content)
     _save_and_write(
@@ -467,7 +453,7 @@ def cmd_update(conn: sqlite3.Connection, child: str, max_sessions: int, db_path:
 3. 前置き・後書きは不要、計画書の本文のみ出力する
 """
 
-    content = call_ollama(prompt, system=system)
+    content = call_ollama(prompt, system=system, num_predict=3000, extra_options={"repeat_penalty": 1.1})
 
     new_version = current_plan["version"] + 1
     archive_plan(conn, current_plan["id"])

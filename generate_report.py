@@ -5,25 +5,16 @@
 出力: 校長向け報告書 Markdown
 """
 
-import csv
-import sys
 import json
+import re
 import argparse
 import sqlite3
-import urllib.request
-import urllib.error
+import sys
 from datetime import datetime
 from pathlib import Path
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen2.5:7b"
-
-# ===== 観点別学習状況の観点（小学校・中学校学習指導要領準拠） =====
-VIEWPOINTS = [
-    "知識・技能",
-    "思考・判断・表現",
-    "主体的に学習に取り組む態度",
-]
+from config import MAX_SESSIONS, VIEWPOINTS
+from utils import call_ollama, load_csv
 
 EVIDENCE_SCHEMA = {
     "type": "object",
@@ -35,7 +26,7 @@ EVIDENCE_SCHEMA = {
     "required": ["知識・技能", "思考・判断・表現", "主体的に学習に取り組む態度"],
 }
 
-def load_child_context_from_db(db_path: str, child: str, exclude_date: str, max_sessions: int = 4) -> dict:
+def load_child_context_from_db(db_path: str, child: str, exclude_date: str, max_sessions: int = MAX_SESSIONS) -> dict:
     """
     DBから児童の過去セッション履歴と現行支援計画を取得する。
     exclude_date: 今回のセッション日付（重複参照を避ける）
@@ -147,14 +138,6 @@ def load_meta_txt(path: str) -> dict:
     return meta
 
 
-def load_csv(path: str) -> list[dict]:
-    rows = []
-    with open(path, encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
-    return rows
-
 def get_children(rows: list[dict], supporter: str) -> list[str]:
     """支援者以外の話者を児童として返す"""
     speakers = set(r["speaker"] for r in rows)
@@ -184,37 +167,8 @@ def build_full_transcript(rows: list[dict]) -> str:
             lines.append(f"[{row['start']}] {row['speaker']}: {row['text']}")
     return "\n".join(lines)
 
-def call_ollama(prompt: str, system: str = "", num_predict: int = -1, format: dict | None = None, extra_options: dict | None = None) -> str:
-    body: dict = {
-        "model": MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.3, "num_predict": num_predict, **(extra_options or {})}
-    }
-    if system:
-        body["system"] = system
-    if format:
-        body["format"] = format
-    payload = json.dumps(body).encode("utf-8")
-
-    req = urllib.request.Request(
-        OLLAMA_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return result.get("response", "").strip()
-    except urllib.error.URLError as e:
-        print(f"[ERROR] Ollama接続失敗: {e}", file=sys.stderr)
-        sys.exit(1)
-
 def normalize_child_report(child: str, raw: str) -> str:
     """LLMの出力を強制的に ## 児童名 / ### 観点 形式に正規化する"""
-    import re
-
     # 児童名見出しを ## に統一（#, ###, ####等すべて）
     raw = re.sub(r'^#{1,6}\s*' + re.escape(child) + r'\s*$', f'## {child}', raw, flags=re.MULTILINE)
 
@@ -316,10 +270,11 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
     try:
         parsed = json.loads(raw)
         return {v: [u for u in parsed.get(v, []) if u] for v in VIEWPOINTS}
-    except (json.JSONDecodeError, AttributeError):
-        # JSON パース失敗時は空の結果を返す（呼び出し元で確認できるよう警告）
-        print(f"[WARNING] Stage1 JSON パース失敗（{child}）。Ollama のバージョンを確認してください（0.3.0 以上必要）。", file=sys.stderr)
-        return {v: [] for v in VIEWPOINTS}
+    except (json.JSONDecodeError, AttributeError) as e:
+        print(f"[ERROR] Stage1 JSONパース失敗（{child}）: {e}", file=sys.stderr)
+        print(f"  Ollamaの出力（先頭200文字）: {raw[:200]!r}", file=sys.stderr)
+        print("  対処方法: Ollamaのバージョンを確認してください（0.3.0以上必要）。", file=sys.stderr)
+        raise RuntimeError(f"Stage1 JSONパース失敗（{child}）") from e
 
 
 def generate_child_report(
@@ -551,7 +506,7 @@ def load_evidence_json(path: str) -> tuple[dict, str, list[str], dict, str, dict
     )
 
 
-def _run_stage1(rows: list[dict], children: list[str], session_info: dict, supporter: str, date_slug: str) -> tuple[str, dict]:
+def _run_stage1(rows: list[dict], children: list[str], session_info: dict, supporter: str, date_slug: str) -> tuple[str, dict[str, dict[str, list[str]]]]:
     """切片化を実行してevidence.jsonに保存し、パスとevidence dictを返す"""
     evidence_by_child: dict[str, dict[str, list[str]]] = {}
 
@@ -661,7 +616,7 @@ def _run_stage2(
     print(f"\n✅ 完了: {output_path}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="あしあと 報告書生成",
         formatter_class=argparse.RawDescriptionHelpFormatter,
