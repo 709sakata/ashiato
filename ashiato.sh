@@ -1,11 +1,13 @@
 #!/bin/bash
 # ashiato.sh - あしあとプロジェクト メインコマンド
 # 使い方:
-#   bash ashiato.sh record [分数]           # 録音開始
-#   bash ashiato.sh transcribe [file]      # 文字起こし
-#   bash ashiato.sh segment [mapped.csv]   # Stage1: 切片化のみ → evidence.json
-#   bash ashiato.sh report [evidence.json] # Stage2: 報告書生成のみ
-#   bash ashiato.sh run [分数]              # 録音→文字起こし→切片化→報告書 一括実行
+#   bash ashiato.sh record [分数]              # 録音開始
+#   bash ashiato.sh transcribe [file]         # 文字起こし
+#   bash ashiato.sh segment [mapped.csv]      # Stage1: 切片化のみ → evidence.json
+#   bash ashiato.sh report [evidence.json]    # Stage2: 報告書生成のみ
+#   bash ashiato.sh store [evidence.json]     # DBに蓄積
+#   bash ashiato.sh plan --child <名前>        # 個別支援計画の生成
+#   bash ashiato.sh run [分数]                 # 録音→文字起こし→切片化→報告書 一括実行
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CMD="${1:-help}"
@@ -28,6 +30,16 @@ case "$CMD" in
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh report <evidence_YYYYMMDD.json>}"
     python3 "${SCRIPT_DIR}/generate_report.py" --stage 2 --evidence "$EVIDENCE_FILE"
     ;;
+  store)
+    # evidence.json を DB に蓄積
+    EVIDENCE_FILE="${1:?使い方: bash ashiato.sh store <evidence_YYYYMMDD.json>}"
+    python3 "${SCRIPT_DIR}/store_session.py" "$EVIDENCE_FILE"
+    ;;
+  plan)
+    # 個別支援計画を生成
+    shift  # 'plan' を消費
+    python3 "${SCRIPT_DIR}/generate_support_plan.py" "$@"
+    ;;
   run)
     MINUTES="${1:-60}"
     echo "=== あしあと 一括実行 ==="
@@ -45,10 +57,17 @@ case "$CMD" in
     echo "  bash ashiato.sh segment <mapped.csv>      # Stage1: 切片化 → evidence.json"
     echo "  bash ashiato.sh report <evidence.json>    # Stage2: 報告書生成"
     echo "  bash ashiato.sh run [分数]                # 全工程一括実行"
+    echo "  bash ashiato.sh store <evidence.json>    # DBに蓄積（成長記録の永続化）"
+    echo "  bash ashiato.sh plan --child <名前>       # 個別支援計画の生成"
+    echo "  bash ashiato.sh plan --list              # 登録済み児童一覧"
     echo ""
     echo "  ★ 推奨フロー（確認しながら）:"
-    echo "     1. bash ashiato.sh segment mapped.csv  # 切片化して evidence.json を生成"
+    echo "     1. bash ashiato.sh segment mapped.csv              # 切片化 → evidence.json"
     echo "     2. (evidence.json を確認・必要なら修正)"
-    echo "     3. bash ashiato.sh report evidence_YYYYMMDD.json  # 報告書生成"
+    echo "     3. bash ashiato.sh report evidence_YYYYMMDD.json   # 報告書生成"
+    echo "     4. bash ashiato.sh store evidence_YYYYMMDD.json    # DBに蓄積"
+    echo ""
+    echo "  ★ 個別支援計画（複数セッション蓄積後）:"
+    echo "     bash ashiato.sh plan --child 太郎"
     ;;
 esac

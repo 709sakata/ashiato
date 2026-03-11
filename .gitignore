@@ -1,8 +1,21 @@
+# 音声・文字起こしデータ（個人情報）
 *.csv
+*.mp3
+*.wav
+*.m4a
+
+# 生成ファイル（ローデータ）
+evidence_*.json
 reports/
 *.md
+!README.md
+
+# DBファイル（Mac mini側で管理）
+db/
+*.db
+*.sqlite
+
+# Python
 __pycache__/
 *.pyc
 .DS_Store
-!README.md
-!README.md
