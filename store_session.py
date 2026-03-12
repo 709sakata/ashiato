@@ -12,12 +12,15 @@
 """
 
 import json
+import logging
 import sys
 import argparse
 from datetime import datetime
 from pathlib import Path
 
 from config import VIEWPOINTS
+
+logger = logging.getLogger(__name__)
 from db import Connection, get_connection
 
 
@@ -82,8 +85,10 @@ def store(evidence_path: str) -> None:
         ).fetchone()
 
         if existing:
-            print(f"⚠️  このセッションはすでにDBに存在します（date={info['date']}, supporter={supporter_name}）")
-            print("   再インポートする場合は --force オプションを使用してください")
+            logger.warning(
+                "このセッションはすでにDBに存在します（date=%s, supporter=%s）。再インポートする場合は --force オプションを使用してください。",
+                info['date'], supporter_name,
+            )
             conn.close()
             return
 

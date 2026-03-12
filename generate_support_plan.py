@@ -23,11 +23,14 @@
 
 import csv
 import json
+import logging
 import sys
 import argparse
 from pathlib import Path
 from datetime import datetime, date
 from config import MAX_SESSIONS, VIEWPOINTS
+
+logger = logging.getLogger(__name__)
 from db import Connection, get_connection
 from store_session import upsert_child
 from utils import call_ollama
@@ -397,18 +400,18 @@ def cmd_init(
 def cmd_update(conn: Connection, child: str, max_sessions: int) -> None:
     row = conn.execute("SELECT id FROM children WHERE name = %s", (child,)).fetchone()
     if not row:
-        print(f"[ERROR] 「{child}」はDBに存在しません。--list で確認してください。")
+        logger.error("「%s」はDBに存在しません。--list で確認してください。", child)
         sys.exit(1)
     child_id = str(row["id"])
 
     current_plan = get_active_plan(conn, child_id)
     if not current_plan:
-        print(f"[ERROR] {child}の個別支援計画がありません。先に --init で作成してください。")
+        logger.error("%sの個別支援計画がありません。先に --init で作成してください。", child)
         sys.exit(1)
 
     history = fetch_child_history(conn, child_id, max_sessions)
     if not history:
-        print(f"[ERROR] {child}のセッションデータがDBにありません。store_session.py で蓄積してください。")
+        logger.error("%sのセッションデータがDBにありません。store_session.py で蓄積してください。", child)
         sys.exit(1)
 
     school_type = history[-1]["school_type"]
@@ -539,7 +542,7 @@ def cmd_update(conn: Connection, child: str, max_sessions: int) -> None:
 def cmd_show(conn: Connection, child: str) -> None:
     row = conn.execute("SELECT id FROM children WHERE name = %s", (child,)).fetchone()
     if not row:
-        print(f"[ERROR] 「{child}」はDBに存在しません。")
+        logger.error("「%s」はDBに存在しません。", child)
         sys.exit(1)
     plan = get_active_plan(conn, str(row["id"]))
     if not plan:

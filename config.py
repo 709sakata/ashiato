@@ -12,8 +12,14 @@
   ASHIATO_MAC_MINI      文字起こしサーバーのホスト名（デフォルト: mac-mini-ollama）
 """
 
+import logging
 import os
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(name)s: %(message)s",
+)
 
 # Supabase 接続設定（db.py でも参照される）
 SUPABASE_DB_URL: str = os.environ.get("SUPABASE_DB_URL", "")
