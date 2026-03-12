@@ -23,23 +23,30 @@ case "$CMD" in
     bash "${SCRIPT_DIR}/transcribe.sh" "$@"
     ;;
   segment)
-    # Stage1: 切片化のみ。evidence.json を生成して終了（人間が確認後にreportを実行）
+    # Stage1: 切片化のみ
     CSV_FILE="${1:?使い方: bash ashiato.sh segment <mapped.csv>}"
-    python3 "${SCRIPT_DIR}/generate_report.py" "$CSV_FILE" --stage 1
+    echo "Mac miniで切片化実行中..." >&2
+    # Mac miniにCSVを転送
+    scp -q "$CSV_FILE" "${MAC_MINI}:/tmp/mapped_to_segment.csv"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 generate_report.py /tmp/mapped_to_segment.csv --stage 1"
+    # 生成された evidence.json を取得
+    scp -q "${MAC_MINI}:~/scripts/ashiato/evidence_*.json" ./
     ;;
   report)
-    # Stage2: evidence.json から報告書を生成（DBがあれば過去履歴・支援計画を参照）
+    # Stage2: 報告書生成のみ（Mac miniで実行）
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh report <evidence_YYYYMMDD.json>}"
-    if [ -f "$DB_PATH" ]; then
-      python3 "${SCRIPT_DIR}/generate_report.py" --stage 2 --evidence "$EVIDENCE_FILE" --db "$DB_PATH"
-    else
-      python3 "${SCRIPT_DIR}/generate_report.py" --stage 2 --evidence "$EVIDENCE_FILE"
-    fi
+    echo "Mac miniで報告書生成中..." >&2
+    scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_report.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 generate_report.py --stage 2 --evidence /tmp/evidence_to_report.json"
+    # 生成された報告書（Markdown）を取得
+    scp -q "${MAC_MINI}:~/scripts/ashiato/report_*.md" ./
     ;;
   store)
-    # evidence.json を DB に蓄積
+    # DBに蓄積（Mac miniで実行）
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh store <evidence_YYYYMMDD.json>}"
-    python3 "${SCRIPT_DIR}/store_session.py" "$EVIDENCE_FILE"
+    echo "Mac miniのDBへ保存中..." >&2
+    scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_store.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 store_session.py /tmp/evidence_to_store.json"
     ;;
   plan)
     # 個別支援計画を生成
@@ -78,10 +85,10 @@ case "$CMD" in
     echo "     bash ashiato.sh plan --init --child 太郎"
     echo ""
     echo "  ★ 毎セッションのフロー:"
-    echo "     1. bash ashiato.sh segment mapped.csv         # 切片化 → evidence.json"
+    echo "     1. bash ashiato.sh segment mapped.csv         # 切片化 → evidence.json (Mac miniで実行)"
     echo "     2. (evidence.json を確認・必要なら修正)"
-    echo "     3. bash ashiato.sh report evidence_XXX.json   # 報告書生成（支援計画・過去履歴を参照）"
-    echo "     4. bash ashiato.sh store evidence_XXX.json    # DBに蓄積"
+    echo "     3. bash ashiato.sh report evidence_XXX.json   # 報告書生成 (Mac miniで実行)"
+    echo "     4. bash ashiato.sh store evidence_XXX.json    # DBに蓄積 (Mac miniのDBへ)"
     echo ""
     echo "  ★ 四半期ごとの計画更新:"
     echo "     bash ashiato.sh plan --update --child 太郎"

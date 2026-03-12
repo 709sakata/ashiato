@@ -24,20 +24,17 @@ echo "Mac miniに転送中（${MAC_MINI}）..." >&2
 scp -q "$AUDIO_FILE" "${MAC_MINI}:/tmp/ashiato_audio.wav" \
   || { echo "エラー: Mac miniへの音声ファイル転送失敗（${MAC_MINI}）" >&2; exit 1; }
 
-echo "Whisper処理中（largeモデル、しばらくお待ちください）..." >&2
+# Mac miniで話者分離実行 (uv run main.py)
+echo "話者分離 + 文字起こし処理中（large-v3, しばらくお待ちください）..." >&2
 
-# Mac miniでWhisper実行
-ssh "$MAC_MINI" 'PATH=$HOME/bin:$PATH python3 -m whisper /tmp/ashiato_audio.wav \
-  --model large \
-  --language Japanese \
-  --output_format txt \
-  --output_dir /tmp/ \
-  --fp16 False 2>/dev/null' \
-  || { echo "エラー: Mac mini上でWhisper実行失敗" >&2; exit 1; }
+ssh "$MAC_MINI" "cd ~/bin/audio-diarization-transcript && \
+  uv run main.py /tmp/ashiato_audio.wav --output_csv_path /tmp/ashiato_audio.csv" \
+  || { echo "エラー: Mac mini上で話者分離実行失敗" >&2; exit 1; }
 
-# 結果をMacBook Airに取得
-scp -q "${MAC_MINI}:/tmp/ashiato_audio.txt" "$TRANSCRIPT_FILE" \
-  || { echo "エラー: 文字起こし結果の取得失敗（${MAC_MINI}:/tmp/ashiato_audio.txt）" >&2; exit 1; }
+# 結果をMacBook Airに取得 (CSV)
+TRANSCRIPT_FILE="${OUTPUT_DIR}/${BASENAME}.csv"
+scp -q "${MAC_MINI}:/tmp/ashiato_audio.csv" "$TRANSCRIPT_FILE" \
+  || { echo "エラー: 文字起こし結果の取得失敗（${MAC_MINI}:/tmp/ashiato_audio.csv）" >&2; exit 1; }
 
 echo "=== 文字起こし完了: $TRANSCRIPT_FILE ===" >&2
 echo "" >&2

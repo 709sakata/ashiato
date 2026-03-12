@@ -16,6 +16,12 @@ import logging
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# プロジェクトルートの .env を読み込む
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s %(name)s: %(message)s",
