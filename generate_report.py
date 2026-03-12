@@ -6,6 +6,7 @@
 """
 
 import json
+import logging
 import re
 import argparse
 import sys
@@ -13,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 from config import MAX_SESSIONS, VIEWPOINTS
+
+logger = logging.getLogger(__name__)
 from db import get_connection
 from utils import call_ollama, load_csv
 
@@ -26,10 +29,9 @@ EVIDENCE_SCHEMA = {
     "required": ["知識・技能", "思考・判断・表現", "主体的に学習に取り組む態度"],
 }
 
-def load_child_context_from_db(db_path: str, child: str, exclude_date: str, max_sessions: int = MAX_SESSIONS) -> dict:
+def load_child_context_from_db(child: str, exclude_date: str, max_sessions: int = MAX_SESSIONS) -> dict:
     """
     Supabase DBから児童の過去セッション履歴と現行支援計画を取得する。
-    db_path: 後方互換のため引数として残すが Supabase 接続では使用しない
     exclude_date: 今回のセッション日付（重複参照を避ける）
     戻り値: {"plan_goals": dict | None, "history": list[dict]}
     """
@@ -285,9 +287,9 @@ def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: di
         parsed = json.loads(raw)
         return {v: [u for u in parsed.get(v, []) if u] for v in VIEWPOINTS}
     except (json.JSONDecodeError, AttributeError) as e:
-        print(f"[ERROR] Stage1 JSONパース失敗（{child}）: {e}", file=sys.stderr)
-        print(f"  Ollamaの出力（先頭200文字）: {raw[:200]!r}", file=sys.stderr)
-        print("  対処方法: Ollamaのバージョンを確認してください（0.3.0以上必要）。", file=sys.stderr)
+        logger.error("Stage1 JSONパース失敗（%s）: %s", child, e)
+        logger.error("  Ollamaの出力（先頭200文字）: %r", raw[:200])
+        logger.error("  対処方法: Ollamaのバージョンを確認してください（0.3.0以上必要）。")
         raise RuntimeError(f"Stage1 JSONパース失敗（{child}）") from e
 
 
@@ -606,7 +608,7 @@ def _run_stage2(
         # DBがあれば過去履歴・支援計画を参照コンテキストとして取得
         db_context = None
         if db_path:
-            db_context = load_child_context_from_db(db_path, child, exclude_date=session_info["date"])
+            db_context = load_child_context_from_db(child, exclude_date=session_info["date"])
             if db_context.get("plan_goals") or db_context.get("history"):
                 history_count = len(db_context.get("history", []))
                 has_plan = bool(db_context.get("plan_goals"))
@@ -666,7 +668,7 @@ def main() -> None:
     # Stage2単独: evidence.jsonから読み込んで報告書生成
     if args.stage == "2":
         if args.csv:
-            print("[WARNING] --stage 2 では --csv は無視されます。", file=sys.stderr)
+            logger.warning("--stage 2 では --csv は無視されます。")
         if not args.evidence:
             parser.error("--stage 2 には --evidence <JSONファイル> が必要です")
         session_info, supporter, children, child_counts, utterances_sample, evidence_by_child = load_evidence_json(args.evidence)
@@ -690,7 +692,7 @@ def main() -> None:
         meta_from_file = load_meta_txt(meta_path)
         print(f"📋 メタ情報を読み込みました: {meta_path}")
     else:
-        print(f"ℹ️  _meta.txt が見つかりません。CLI引数のセッション情報を使用します。", file=sys.stderr)
+        logger.info("_meta.txt が見つかりません。CLI引数のセッション情報を使用します。")
 
     default_date        = datetime.today().strftime("%Y年%m月%d日")
     default_location    = "太子遊び冒険の森ASOBO（兵庫県揖保郡太子町）"

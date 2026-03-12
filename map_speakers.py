@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 import csv
+import json
+import logging
 import sys
 import os
+import urllib.error
 from datetime import datetime
 
 from config import OLLAMA_TIMEOUT
 from utils import call_ollama
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_name(name: str, max_length: int = 50) -> str:
+    """CSV破壊文字を除去し、長さを制限する。"""
+    name = name.replace('"', '').replace('\n', '').replace('\r', '').strip()
+    return name[:max_length]
 
 
 def ollama_extract_activity(csv_text: str) -> str:
@@ -69,7 +80,7 @@ def map_speakers(input_csv: str, output_csv: str | None = None) -> tuple[str, st
 
     mapping = {}
     for sp in speakers:
-        name = input(f"{sp} の名前: ").strip()
+        name = _sanitize_name(input(f"{sp} の名前: "))
         mapping[sp] = name if name else sp
 
     print("\n─" * 50)
@@ -89,8 +100,8 @@ def map_speakers(input_csv: str, output_csv: str | None = None) -> tuple[str, st
         activity = input(f"活動内容（Enterでそのまま使用、修正する場合は入力）: ").strip()
         if not activity:
             activity = suggested
-    except Exception as e:
-        print(f"[WARNING] AI抽出失敗（{e}）。手動で入力してください。", file=sys.stderr)
+    except (urllib.error.URLError, json.JSONDecodeError, RuntimeError) as e:
+        logger.warning("AI抽出失敗（%s）。手動で入力してください。", e)
         activity = input("活動内容（例：自然観察・虫採り）: ").strip()
 
     if output_csv is None:

@@ -7,12 +7,15 @@
 
 import csv
 import json
+import logging
 import sys
 import time
 import urllib.error
 import urllib.request
 
 from config import MODEL, OLLAMA_MAX_RETRIES, OLLAMA_TIMEOUT, OLLAMA_URL
+
+logger = logging.getLogger(__name__)
 
 
 def call_ollama(
@@ -55,17 +58,13 @@ def call_ollama(
             last_error = e
             if attempt < OLLAMA_MAX_RETRIES - 1:
                 wait = 2**attempt  # 1s, 2s, 4s, ...
-                print(
-                    f"[WARNING] Ollama接続失敗（試行{attempt + 1}/{OLLAMA_MAX_RETRIES}）。"
-                    f"{wait}秒後にリトライ: {e}",
-                    file=sys.stderr,
+                logger.warning(
+                    "Ollama接続失敗（試行%d/%d）。%d秒後にリトライ: %s",
+                    attempt + 1, OLLAMA_MAX_RETRIES, wait, e,
                 )
                 time.sleep(wait)
 
-    print(
-        f"[ERROR] Ollama接続失敗（{OLLAMA_MAX_RETRIES}回試行）: {last_error}",
-        file=sys.stderr,
-    )
+    logger.error("Ollama接続失敗（%d回試行）: %s", OLLAMA_MAX_RETRIES, last_error)
     sys.exit(1)
 
 
