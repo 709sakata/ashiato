@@ -19,7 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # プロジェクトルートの .env を読み込む
-env_path = Path(__file__).parent / ".env"
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 logging.basicConfig(

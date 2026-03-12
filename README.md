@@ -101,7 +101,7 @@ bash ashiato.sh transcribe <音声ファイル.wav>
 ### ステップ2: 話者マッピング
 AI が分離した「話者ラベル」に名前を付けます。
 ```bash
-python3 map_speakers.py <文字起こしされた.csv>
+python3 src/map_speakers.py <文字起こしされた.csv>
 # 対話形式で SPEAKER_00 等に「太郎」「山田」などの名前を割り当てます
 # → mapped_YYYYMMDD.csv が生成されます
 ```
@@ -142,4 +142,4 @@ bash ashiato.sh store evidence_*.json
 
 - **ローカル完結**: すべての推論処理は Mac mini 内で完結。音声データ自体は外部サーバーへ送信されません。
 - **ヒューマン・イン・ザ・ループ**: AI はあくまで「草稿」と「根拠の提示」を行い、最終的な確認・承認は現職教員または支援者が行います。
-- **匿名化**: `map_speakers.py` 実行時に、報告書用の児童名を匿名化（児童A, Bなど）するオプションがあります。
+- **匿名化**: `src/map_speakers.py` 実行時に、報告書用の児童名を匿名化（児童A, Bなど）するオプションがあります。

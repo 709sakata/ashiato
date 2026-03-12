@@ -10,17 +10,18 @@
 #   bash ashiato.sh plan --update --child <名前>  # 個別支援計画の四半期更新
 #   bash ashiato.sh run [分数]                     # 録音→文字起こし→切片化→報告書 一括実行
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DB_PATH="${ASHIATO_DB:-${SCRIPT_DIR}/db/ashiato.db}"
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$BIN_DIR/.." && pwd)"
+DB_PATH="${ASHIATO_DB:-${PROJECT_ROOT}/db/ashiato.db}"
 CMD="${1:-help}"
 shift
 
 case "$CMD" in
   record)
-    bash "${SCRIPT_DIR}/record.sh" "$@"
+    bash "${BIN_DIR}/record.sh" "$@"
     ;;
   transcribe)
-    bash "${SCRIPT_DIR}/transcribe.sh" "$@"
+    bash "${BIN_DIR}/transcribe.sh" "$@"
     ;;
   segment)
     # Stage1: 切片化のみ
@@ -28,7 +29,7 @@ case "$CMD" in
     echo "Mac miniで切片化実行中..." >&2
     # Mac miniにCSVを転送
     scp -q "$CSV_FILE" "${MAC_MINI}:/tmp/mapped_to_segment.csv"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 generate_report.py /tmp/mapped_to_segment.csv --stage 1"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/generate_report.py /tmp/mapped_to_segment.csv --stage 1"
     # 生成された evidence.json を取得
     scp -q "${MAC_MINI}:~/scripts/ashiato/evidence_*.json" ./
     ;;
@@ -37,7 +38,7 @@ case "$CMD" in
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh report <evidence_YYYYMMDD.json>}"
     echo "Mac miniで報告書生成中..." >&2
     scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_report.json"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 generate_report.py --stage 2 --evidence /tmp/evidence_to_report.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/generate_report.py --stage 2 --evidence /tmp/evidence_to_report.json"
     # 生成された報告書（Markdown）を取得
     scp -q "${MAC_MINI}:~/scripts/ashiato/report_*.md" ./
     ;;
@@ -46,22 +47,22 @@ case "$CMD" in
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh store <evidence_YYYYMMDD.json>}"
     echo "Mac miniのDBへ保存中..." >&2
     scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_store.json"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 store_session.py /tmp/evidence_to_store.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/store_session.py /tmp/evidence_to_store.json"
     ;;
   plan)
     # 個別支援計画を生成
     shift  # 'plan' を消費
-    python3 "${SCRIPT_DIR}/generate_support_plan.py" "$@"
+    python3 "${PROJECT_ROOT}/src/generate_support_plan.py" "$@"
     ;;
   run)
     MINUTES="${1:-60}"
     echo "=== あしあと 一括実行 ==="
     echo "① 録音 (${MINUTES}分)"
-    AUDIO_FILE=$(bash "${SCRIPT_DIR}/record.sh" "$MINUTES")
+    AUDIO_FILE=$(bash "${BIN_DIR}/record.sh" "$MINUTES")
     echo "② 文字起こし"
-    TRANSCRIPT_FILE=$(bash "${SCRIPT_DIR}/transcribe.sh" "$AUDIO_FILE")
+    TRANSCRIPT_FILE=$(bash "${BIN_DIR}/transcribe.sh" "$AUDIO_FILE")
     echo "③ 切片化 + 報告書生成（一括）"
-    python3 "${SCRIPT_DIR}/generate_report.py" "$TRANSCRIPT_FILE"
+    python3 "${PROJECT_ROOT}/src/generate_report.py" "$TRANSCRIPT_FILE"
     ;;
   help|*)
     echo "使い方:"
