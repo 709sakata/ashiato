@@ -27,7 +27,7 @@ scp -q "$AUDIO_FILE" "${MAC_MINI}:/tmp/ashiato_audio.wav" \
 # Mac miniで話者分離実行 (uv run main.py)
 echo "話者分離 + 文字起こし処理中（large-v3, しばらくお待ちください）..." >&2
 
-ssh "$MAC_MINI" "cd ~/bin/audio-diarization-transcript && \
+ssh "$MAC_MINI" "export PATH=\$HOME/.local/bin:\$PATH && cd ~/bin/audio-diarization-transcript && \
   uv run main.py /tmp/ashiato_audio.wav --output_csv_path /tmp/ashiato_audio.csv" \
   || { echo "エラー: Mac mini上で話者分離実行失敗" >&2; exit 1; }
 
