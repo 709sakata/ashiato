@@ -24,6 +24,7 @@ class ReportGenerator:
         *,
         db_context: dict | None = None,
         build_context_section_fn=None,
+        guidelines_retriever=None,
     ) -> str:
         """
         観点別根拠発言リストから児童ごとの記述を生成する。
@@ -34,6 +35,7 @@ class ReportGenerator:
             session_info: セッション情報
             db_context: load_context_for_report() の戻り値（省略可）
             build_context_section_fn: コンテキストセクションを構築する関数（省略可）
+            guidelines_retriever: GuidelinesRetriever | None（省略可）
 
         Returns:
             Markdown形式の記述文字列
@@ -72,6 +74,24 @@ class ReportGenerator:
                 "成長の継続が今回の発言からも確認できる場合は「引き続き」「継続して」等の表現を使ってよい。"
             )
 
+        # ガイドラインRAGによる参照箇所の取得
+        guidelines_context = ""
+        future_guidelines_context = ""
+        if guidelines_retriever is not None and guidelines_retriever.is_available():
+            # current/: 観点別学習状況の記述スタイル根拠
+            curr_query = f"{school_type} 観点別学習状況 指導要録 記述"
+            curr_chunks = guidelines_retriever.retrieve(curr_query, school_type, source_type="current")
+            guidelines_context = guidelines_retriever.format_for_prompt(curr_chunks)
+            # future/: 不登校支援・フリースクールの制度的背景
+            fut_query = "不登校 フリースクール 出席扱い 体験活動 教育的意義"
+            fut_chunks = guidelines_retriever.retrieve(fut_query, school_type, source_type="future")
+            future_guidelines_context = guidelines_retriever.format_for_prompt(fut_chunks)
+            if guidelines_context or future_guidelines_context:
+                logger.debug(
+                    "ガイドラインRAG: current %d チャンク, future %d チャンク取得（Stage2）",
+                    len(curr_chunks), len(fut_chunks),
+                )
+
         prompt = load_prompt(
             "generate_report_child",
             child=child,
@@ -82,6 +102,8 @@ class ReportGenerator:
             context_section=context_section,
             evidence_text=evidence_text,
             continuity_instruction=continuity_instruction,
+            guidelines_context=guidelines_context,
+            future_guidelines_context=future_guidelines_context,
             count_kn=evidence_counts["知識・技能"],
             count_th=evidence_counts["思考・判断・表現"],
             count_at=evidence_counts["主体的に学習に取り組む態度"],

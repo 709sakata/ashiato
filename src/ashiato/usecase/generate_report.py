@@ -11,7 +11,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from ashiato.config import MAX_SESSIONS
+from ashiato.config import GUIDELINES_ENABLED, MAX_SESSIONS
 from ashiato.domain.viewpoints import VIEWPOINTS
 from ashiato.core.agents.reporter import ReportGenerator
 from ashiato.core.services.child_context_service import load_context_for_report
@@ -68,6 +68,7 @@ def generate_child_report(
     session_info: dict,
     *,
     db_context: dict | None = None,
+    guidelines_retriever=None,
 ) -> str:
     """Stage 2 - 記述生成: 切片化済みの根拠発言リストをもとに観点別記述を作成"""
     raw = ReportGenerator().generate_child_report(
@@ -76,6 +77,7 @@ def generate_child_report(
         session_info,
         db_context=db_context,
         build_context_section_fn=build_context_section,
+        guidelines_retriever=guidelines_retriever,
     )
     return normalize_child_report(child, raw)
 
@@ -108,6 +110,16 @@ def _run_stage2(
     db_path: str | None = None,
 ) -> None:
     """evidence dictから報告書Markdownを生成して書き出す"""
+    # ガイドラインRAGの初期化（有効化されている場合のみ）
+    guidelines_retriever = None
+    if GUIDELINES_ENABLED:
+        from ashiato.core.services.guidelines_service import GuidelinesRetriever
+        guidelines_retriever = GuidelinesRetriever()
+        if guidelines_retriever.is_available():
+            print("📚 ガイドラインRAGが有効です（インデックス取得済み）")
+        else:
+            print("⚠️  ASHIATO_GUIDELINES_ENABLED=true ですがインデックスが見つかりません")
+            guidelines_retriever = None
     lines = []
     lines.append(f"# あしあと（太子遊び冒険の森ASOBO）活動報告書（校長向け）")
     lines.append(f"")
@@ -155,7 +167,11 @@ def _run_stage2(
                 print(f"  📚 {child}: 過去{history_count}件の履歴{'・支援計画' if has_plan else ''}を参照")
 
         print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
-        report = generate_child_report(child, evidence, session_info, db_context=db_context)
+        report = generate_child_report(
+            child, evidence, session_info,
+            db_context=db_context,
+            guidelines_retriever=guidelines_retriever,
+        )
         lines.append(report)
         lines.append(f"")
         lines.append(f"---")
