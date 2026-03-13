@@ -12,18 +12,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from config import MAX_SESSIONS
-from domain.viewpoints import VIEWPOINTS
-from infra.llm import call_ollama
-from infra.csv_reader import load_csv
+from ashiato.config import MAX_SESSIONS
+from ashiato.domain.viewpoints import VIEWPOINTS
+from ashiato.core.agents.extractor import EvidenceExtractor
+from ashiato.infra.csv_reader import load_csv
 
 logger = logging.getLogger(__name__)
-
-EVIDENCE_SCHEMA = {
-    "type": "object",
-    "properties": {vp: {"type": "array", "items": {"type": "string"}} for vp in VIEWPOINTS},
-    "required": VIEWPOINTS,
-}
 
 
 def load_meta_txt(path: str) -> dict:
@@ -71,90 +65,7 @@ def build_full_transcript(rows: list[dict]) -> str:
 
 def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: dict | None = None) -> dict[str, list[str]]:
     """Stage 1 - 切片化: 発言記録を観点別に分類し、根拠発言をそのまま抜き出す"""
-    school_type = (session_info or {}).get("school_type", "小学校")
-
-    system = (
-        f"あなたは{school_type}指導要録の観点別学習評価を専門とする教育記録アナリストである。"
-        f"この記録は{school_type}への出席扱い申請に使用される公的文書であり、"
-        "発言の根拠が審査されるため正確性が厳格に求められる。"
-        "発言テキストは一字一句変えずに記録し、推測・補完・解釈は絶対に行わない。"
-    )
-
-    prompt = f"""# 前提条件（Context）
-本作業の目的: NPO法人姫路YMCAが運営するフリースクール「あしあと」の太子遊び冒険の森ASOBO（兵庫県揖保郡太子町の里山）での体験セッションにおける{child}さんの発言記録から、
-{school_type}の指導要録（出席扱い申請用）に記載する観点別学習状況の根拠発言を特定・分類すること。
-
-# 観点の定義（Task: 里山体験における解釈）
-■ 知識・技能
-→ 自然の生き物・植物・現象についての新しい知識、または道具・技能の習得・実践を示す発言
-【該当例】「カブトムシはクヌギの木の汁を吸うんだって！」「火起こし、できた！」
-【非該当例】「楽しかった」「やってみたい」（感想・意欲のみで知識・技能の内容がない）
-
-■ 思考・判断・表現
-→ 自然現象への疑問・気づき・仮説・比較・判断を言語化した発言
-【該当例】「なんでこっちの葉っぱだけ虫に食われてるんだろう」「こっちの方が火がつきやすいと思う」
-【非該当例】「すごい！」（驚きのみで考察・判断の内容がない）
-
-■ 主体的に学習に取り組む態度
-→ 自発的挑戦・継続意欲・困難への粘り強さ・他者との協力意識を示す発言
-【該当例】「もう1回やってみる」「次は自分でやりたい」「〇〇くんも一緒にやろう」
-【非該当例】支援者に促されて行動した旨のみが記録されている発言
-
-# 境界例と判断推論（グレーゾーン対応）
-複数の観点に当てはまりそうな発言は、以下の思考チェーンで分類する。
-
-【境界例1】「やった！火起こしできた！これ難しかったんだよな」
-→ 感想だけか？ → No（「できた」という技能達成を含む）
-→ 知識・技能か？ → Yes（火起こし技能の習得・成功を示す）
-→ 主体的に学習か？ → 意欲も感じるが技能習得が主軸
-→ 結論: 知識・技能 に分類
-
-【境界例2】「もう1回やってみる！絶対できるようになりたい」
-→ 技能の内容か？ → No（具体的な技能内容の言及なし）
-→ 思考・判断か？ → No（疑問・考察でなく意欲の表明）
-→ 主体的に学習か？ → Yes（継続意欲・再挑戦の意志を明言）
-→ 結論: 主体的に学習に取り組む態度 に分類
-
-【迷った場合の判断優先順位（tiebreaker）】
-具体的な技能・知識の内容を示す → 知識・技能
-疑問・気づき・判断を言語化している → 思考・判断・表現
-継続意欲・挑戦・協力の意志を示す → 主体的に学習に取り組む態度
-
-# {child}さんの発言記録（支援者とのやりとり含む）
-{transcript}
-
-# 思考ステップ（この順で実行すること）
-1. 発言記録をすべて通読する
-2. 各発言を上記3観点の定義・具体例と照らし合わせて評価する
-3. 最も当てはまる観点に1つのみ分類する（どれにも該当しない場合は除外）
-4. 下記の制約ルールに違反していないか確認する
-5. JSON形式で出力する
-
-# 制約ルール（すべて厳守する）
-1. 発言テキストは一字一句そのまま記録する（要約・編集・補完・解釈禁止）
-2. 発言の意図・理由が記録内で明言されていない場合は推測で補完しない
-3. 1つの発言は最も当てはまる観点1つにのみ分類する（重複分類禁止）
-4. 4語以下の短い相槌・返事（「うん」「そう」「え」「はい」「わかった」等）は除外する
-5. どの観点にも該当しない発言は除外する
-6. 該当発言が0件の観点は空配列にする
-
-# 出力形式（このJSONのみを出力すること。前置き・後書き不要）
-{{
-  "知識・技能": ["該当する発言をそのまま記載", "..."],
-  "思考・判断・表現": ["該当する発言をそのまま記載", "..."],
-  "主体的に学習に取り組む態度": ["該当する発言をそのまま記載", "..."]
-}}
-"""
-    raw = call_ollama(prompt, system=system, num_predict=-1, format=EVIDENCE_SCHEMA,
-                      extra_options={"temperature": 0.1})
-    try:
-        parsed = json.loads(raw)
-        return {v: [u for u in parsed.get(v, []) if u] for v in VIEWPOINTS}
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.error("Stage1 JSONパース失敗（%s）: %s", child, e)
-        logger.error("  Ollamaの出力（先頭200文字）: %r", raw[:200])
-        logger.error("  対処方法: Ollamaのバージョンを確認してください（0.3.0以上必要）。")
-        raise RuntimeError(f"Stage1 JSONパース失敗（{child}）") from e
+    return EvidenceExtractor().run(child, transcript, session_info)
 
 
 def _pick_representative_utterances(rows: list[dict], children: list[str], n: int = 2) -> str:
@@ -239,7 +150,7 @@ def _run_stage1(rows: list[dict], children: list[str], session_info: dict, suppo
     save_evidence_json(evidence_by_child, session_info, supporter, children, rows, evidence_path)
     print(f"\n💾 切片化結果を保存しました: {evidence_path}", file=sys.stderr)
     print(f"   → 内容を確認・修正後、Stage2を実行してください:", file=sys.stderr)
-    print(f"   PYTHONPATH=src python3 src/usecase/generate_report.py --evidence {evidence_path}", file=sys.stderr)
+    print(f"   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence {evidence_path}", file=sys.stderr)
     return evidence_path, evidence_by_child
 
 
@@ -249,8 +160,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 実行例:
-  PYTHONPATH=src python3 src/usecase/segment_evidence.py mapped.csv
-  PYTHONPATH=src python3 src/usecase/segment_evidence.py mapped.csv --supporter 山田
+  PYTHONPATH=src python3 src/ashiato/usecase/segment_evidence.py mapped.csv
+  PYTHONPATH=src python3 src/ashiato/usecase/segment_evidence.py mapped.csv --supporter 山田
 """,
     )
     parser.add_argument("csv", help="入力CSVファイル（mapped_*.csv）")

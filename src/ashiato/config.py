@@ -18,8 +18,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# プロジェクトルートの .env を読み込む
-env_path = Path(__file__).parent.parent / ".env"
+# プロジェクトルートの .env を読み込む（src/ashiato/ から3階層上）
+env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 logging.basicConfig(

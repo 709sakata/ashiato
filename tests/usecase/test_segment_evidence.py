@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from usecase.segment_evidence import (
+from ashiato.usecase.segment_evidence import (
     build_full_transcript,
     build_transcript_per_child,
     get_children,

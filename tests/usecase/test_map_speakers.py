@@ -3,7 +3,7 @@ usecase/map_speakers.py の純粋関数のユニットテスト
 """
 import pytest
 
-from usecase.map_speakers import _sanitize_name
+from ashiato.usecase.map_speakers import _sanitize_name
 
 
 class TestSanitizeName:

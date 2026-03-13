@@ -6,7 +6,7 @@
                    例: postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres
 
 使い方:
-  from infra.db import get_connection
+  from ashiato.infra.db import get_connection
   conn = get_connection()
   row  = conn.execute("SELECT id FROM children WHERE name = %s", ("太郎",)).fetchone()
   rows = conn.execute("SELECT * FROM sessions ORDER BY date").fetchall()
@@ -15,7 +15,7 @@
 import psycopg2
 import psycopg2.extras
 
-from config import SUPABASE_DB_URL
+from ashiato.config import SUPABASE_DB_URL
 
 
 class _Cursor:

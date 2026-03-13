@@ -6,35 +6,35 @@
 
 使い方:
   # 初回計画作成（保護者面談の文字起こしCSVから）
-  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --init --child 太郎 --intake intake_mapped.csv
+  PYTHONPATH=src python3 src/ashiato/usecase/manage_support_plan.py --init --child 太郎 --intake intake_mapped.csv
 
   # 初回計画作成（対話式入力）
-  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --init --child 太郎
+  PYTHONPATH=src python3 src/ashiato/usecase/manage_support_plan.py --init --child 太郎
 
   # 四半期更新（蓄積セッションデータをもとに改定版を生成）
-  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --update --child 太郎
+  PYTHONPATH=src python3 src/ashiato/usecase/manage_support_plan.py --update --child 太郎
 
   # 現行計画の表示
-  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --show --child 太郎
+  PYTHONPATH=src python3 src/ashiato/usecase/manage_support_plan.py --show --child 太郎
 
   # 登録済み児童と計画状況の一覧
-  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --list
+  PYTHONPATH=src python3 src/ashiato/usecase/manage_support_plan.py --list
 """
 
 import csv
-import json
 import logging
 import sys
 import argparse
 from pathlib import Path
-from datetime import datetime, date
-from config import MAX_SESSIONS
-from domain.viewpoints import VIEWPOINTS
+from datetime import datetime
+from ashiato.config import MAX_SESSIONS
+from ashiato.domain.viewpoints import VIEWPOINTS
 
 logger = logging.getLogger(__name__)
-from infra.db import Connection, get_connection
-from usecase.store_session import upsert_child
-from infra.llm import call_ollama
+from ashiato.infra.db import Connection, get_connection
+from ashiato.usecase.store_session import upsert_child
+from ashiato.core.agents.plan_agent import PlanAgent
+from ashiato.core.services.child_context_service import load_history_for_plan
 
 
 # =============================================================================
@@ -101,58 +101,6 @@ def get_plan_goals_dict(conn: Connection, plan_id: str) -> dict:
     return {r["code"]: r["goal_text"] for r in rows}
 
 
-def _get_child_school_type(conn: Connection, child_id: str) -> str:
-    """児童の学校種別コードを返す（未登録なら '小学校'）"""
-    row = conn.execute(
-        """SELECT COALESCE(st.code, '小学校') AS school_type
-           FROM children c
-           LEFT JOIN schools      sc ON sc.id = c.school_id
-           LEFT JOIN school_types st ON st.id = sc.school_type_id
-           WHERE c.id = %s""",
-        (child_id,),
-    ).fetchone()
-    return row["school_type"] if row else "小学校"
-
-
-def fetch_child_history(conn: Connection, child_id: str, max_sessions: int = MAX_SESSIONS) -> list[dict]:
-    school_type = _get_child_school_type(conn, child_id)
-
-    sessions = conn.execute(
-        """SELECT DISTINCT s.id, s.date,
-                  COALESCE(at.name, s.activity_detail, '') AS activity,
-                  COALESCE(l.name, '')                     AS location
-           FROM sessions s
-           JOIN session_evidence se ON se.session_id = s.id
-           LEFT JOIN activity_types at ON at.id = s.activity_type_id
-           LEFT JOIN locations      l  ON l.id  = s.location_id
-           WHERE se.child_id = %s
-           ORDER BY s.date DESC LIMIT %s""",
-        (child_id, max_sessions),
-    ).fetchall()
-
-    history = []
-    for s in sessions:
-        utterances = conn.execute(
-            """SELECT vp.code AS viewpoint, se.utterance
-               FROM session_evidence se
-               JOIN viewpoints vp ON vp.id = se.viewpoint_id
-               WHERE se.session_id = %s AND se.child_id = %s""",
-            (str(s["id"]), child_id),
-        ).fetchall()
-        evidence: dict[str, list[str]] = {v: [] for v in VIEWPOINTS}
-        for u in utterances:
-            if u["viewpoint"] in evidence:
-                evidence[u["viewpoint"]].append(u["utterance"])
-        history.append({
-            "date": str(s["date"]),
-            "activity": s["activity"],
-            "location": s["location"],
-            "school_type": school_type,
-            "evidence": evidence,
-        })
-    return list(reversed(history))
-
-
 def load_intake_csv(path: str) -> tuple[list[str], str]:
     """保護者面談の文字起こしCSVを読み込む。
     戻り値: (話者リスト, 全発言テキスト)
@@ -200,54 +148,6 @@ def extract_goals_json(content: str) -> dict[str, str]:
 # =============================================================================
 # 初回計画作成
 # =============================================================================
-
-def _build_init_prompt(child: str, school_type: str, period_start: str, period_end: str, info_section: str) -> str:
-    return f"""# 個別支援計画（初回）作成依頼
-
-## 対象児童
-名前: {child}
-学校種別: {school_type}
-計画期間: {period_start} ～ {period_end}
-
-{info_section}
-
----
-
-# 作成する計画書の構成
-
-以下の構成で個別支援計画書を作成してください。
-
-## 1. 現状把握（アセスメント）
-提供された情報をもとに、{child}の現在の姿を2〜3文で整理する。
-
-## 2. 支援目標（{period_start} ～ {period_end}）
-
-### 知識・技能
-（具体的な到達目標を1〜2文で）
-
-### 思考・判断・表現
-（具体的な到達目標を1〜2文で）
-
-### 主体的に学習に取り組む態度
-（具体的な到達目標を1〜2文で）
-
-## 3. 支援方針・手立て
-（2〜4項目。里山・野外体験という場の特性を活かした内容で）
-
-## 4. 連携・共有事項
-（学校・保護者と共有すべき観察の視点を2〜3項目）
-
-## 5. 評価の観点（セッションごとの観察ポイント）
-（毎回の記録で何を見るかを2〜3項目。報告書作成時の指針となる）
-
----
-
-# 制約ルール
-1. 人称は「{child}は」で統一し、「彼/彼女」は使わない
-2. 提供された情報に根拠のない事実を補完しない
-3. 前置き・後書きは不要、計画書の本文のみ出力する
-"""
-
 
 def _save_and_write(
     conn: Connection,
@@ -298,13 +198,6 @@ def cmd_init(
         if ans not in ("y", "yes"):
             print("中断しました。更新の場合は --update を使用してください。")
             return
-
-    system = (
-        f"あなたは{school_type}の特別支援教育コーディネーターであり、"
-        "フリースクール「あしあと」（太子遊び冒険の森ASOBO）での体験学習を通じた"
-        "個別支援計画の作成専門家である。"
-        "提供された情報のみに基づき、具体的・行動観察可能な計画書を作成する。"
-    )
 
     if intake_csv:
         print(f"\n{'─'*50}")
@@ -383,8 +276,7 @@ def cmd_init(
         source_note = "対話式入力"
 
     print(f"\n✍️  個別支援計画を生成中...")
-    prompt = _build_init_prompt(child, school_type, period_start, period_end, info_section)
-    content = call_ollama(prompt, system=system, num_predict=3000, extra_options={"repeat_penalty": 1.1})
+    content = PlanAgent().generate_init_plan(child, school_type, period_start, period_end, info_section)
 
     goals_dict = extract_goals_json(content)
     _save_and_write(
@@ -409,7 +301,7 @@ def cmd_update(conn: Connection, child: str, max_sessions: int) -> None:
         logger.error("%sの個別支援計画がありません。先に --init で作成してください。", child)
         sys.exit(1)
 
-    history = fetch_child_history(conn, child_id, max_sessions)
+    history = load_history_for_plan(conn, child_id, max_sessions)
     if not history:
         logger.error("%sのセッションデータがDBにありません。store_session.py で蓄積してください。", child)
         sys.exit(1)
@@ -447,69 +339,18 @@ def cmd_update(conn: Connection, child: str, max_sessions: int) -> None:
 
     print(f"\n✍️  個別支援計画を更新中...")
 
-    system = (
-        f"あなたは{school_type}の特別支援教育コーディネーターであり、"
-        "フリースクール「あしあと」の体験学習記録をもとに"
-        "個別支援計画を定期的に改定する専門家である。"
-        "記録にある発言のみを根拠に成長を評価し、次期目標を設定する。"
+    content = PlanAgent().generate_update_plan(
+        child=child,
+        school_type=school_type,
+        date_range=date_range,
+        session_count=session_count,
+        new_period_start=new_period_start,
+        new_period_end=new_period_end,
+        current_plan_version=current_plan["version"],
+        current_plan_content=current_plan["content"],
+        history_text=history_text,
+        trend_text=trend_text,
     )
-
-    prompt = f"""# 個別支援計画 四半期改定依頼
-
-## 対象児童
-名前: {child}
-学校種別: {school_type}
-評価期間: {date_range}（{session_count}セッション）
-新計画期間: {new_period_start} ～ {new_period_end}
-
-## 現行計画（v{current_plan['version']}）
-{current_plan['content']}
-
----
-
-## 今期のセッション記録（根拠発言サンプル）
-{history_text}
-
-## 観点別成長の数値推移
-{trend_text}
-
----
-
-# 作成する改定計画書の構成
-
-## 1. 今期の評価（振り返り）
-現行計画の目標に対して観察されたことを観点ごとに評価する。
-- 根拠発言の数値推移と具体的発言を引用して評価すること
-- 目標に対して「達成された・進展が見られた・継続課題」の判断を示す
-
-## 2. 支援目標（{new_period_start} ～ {new_period_end}）
-
-### 知識・技能
-（今期の評価を踏まえた次期目標を1〜2文で）
-
-### 思考・判断・表現
-（今期の評価を踏まえた次期目標を1〜2文で）
-
-### 主体的に学習に取り組む態度
-（今期の評価を踏まえた次期目標を1〜2文で）
-
-## 3. 支援方針・手立て（次期）
-（今期の観察をもとに調整した支援アプローチ、2〜4項目）
-
-## 4. 連携・共有事項
-（学校・保護者と共有すべき今期の成長・次期の方針、2〜3項目）
-
-## 5. 評価の観点（次期のセッションで見るポイント）
-
----
-
-# 制約ルール
-1. 人称は「{child}は」で統一し、「彼/彼女」は使わない
-2. セッション記録に根拠のない事実は記述しない
-3. 前置き・後書きは不要、計画書の本文のみ出力する
-"""
-
-    content = call_ollama(prompt, system=system, num_predict=3000, extra_options={"repeat_penalty": 1.1})
 
     new_version = current_plan["version"] + 1
     archive_plan(conn, str(current_plan["id"]))
