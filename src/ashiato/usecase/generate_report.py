@@ -2,7 +2,7 @@
 """
 あしあとプロジェクト - Stage2 報告書生成スクリプト
 入力: evidence_YYYYMMDD.json（Stage1切片化済み）
-出力: report_校長向け_YYYYMMDD.md
+出力: report_校長向け_YYYYMMDD.md / report_保護者向け_YYYYMMDD.md
 """
 
 import logging
@@ -18,6 +18,16 @@ from ashiato.core.services.child_context_service import load_context_for_report
 from ashiato.usecase.segment_evidence import load_evidence_json
 
 logger = logging.getLogger(__name__)
+
+_AUDIENCE_LABEL = {"principal": "校長向け", "parent": "保護者向け"}
+_AUDIENCE_TITLE = {
+    "principal": "あしあと（太子遊び冒険の森ASOBO）活動報告書（校長向け）",
+    "parent":    "あしあと（太子遊び冒険の森ASOBO）活動報告書（保護者向け）",
+}
+_SECTION_HEADING = {
+    "principal": "## 観点別学習状況（児童別）",
+    "parent":    "## お子さんの活動のようす",
+}
 
 
 def build_context_section(child: str, context: dict) -> str:
@@ -62,11 +72,20 @@ def normalize_child_report(child: str, raw: str) -> str:
     return raw.strip()
 
 
+def normalize_child_report_parent(child: str, raw: str) -> str:
+    """保護者向けレポートの後処理: 代名詞置換のみ（見出し正規化はしない）"""
+    child_san = f"{child}さん"
+    raw = re.sub(r'彼女(?=[はがのをにへもと])', child_san, raw)
+    raw = re.sub(r'彼(?=[はがのをにへもと])', child_san, raw)
+    return raw.strip()
+
+
 def generate_child_report(
     child: str,
     evidence: dict[str, list[str]],
     session_info: dict,
     *,
+    audience: str = "principal",
     db_context: dict | None = None,
     guidelines_retriever=None,
 ) -> str:
@@ -75,10 +94,13 @@ def generate_child_report(
         child,
         evidence,
         session_info,
+        audience=audience,
         db_context=db_context,
         build_context_section_fn=build_context_section,
         guidelines_retriever=guidelines_retriever,
     )
+    if audience == "parent":
+        return normalize_child_report_parent(child, raw)
     return normalize_child_report(child, raw)
 
 
@@ -86,6 +108,7 @@ def generate_session_summary(
     children: list[str],
     session_info: dict,
     *,
+    audience: str = "principal",
     child_counts: dict[str, int] | None = None,
     utterances_sample: str | None = None,
 ) -> str:
@@ -93,6 +116,7 @@ def generate_session_summary(
     return ReportGenerator().generate_session_summary(
         children,
         session_info,
+        audience=audience,
         child_counts=child_counts,
         utterances_sample=utterances_sample,
     )
@@ -105,14 +129,15 @@ def _run_stage2(
     supporter: str,
     output_path: str,
     *,
+    audience: str = "principal",
     child_counts: dict[str, int] | None = None,
     utterances_sample: str | None = None,
     db_path: str | None = None,
 ) -> None:
     """evidence dictから報告書Markdownを生成して書き出す"""
-    # ガイドラインRAGの初期化（有効化されている場合のみ）
+    # ガイドラインRAGの初期化（principal かつ有効化されている場合のみ）
     guidelines_retriever = None
-    if GUIDELINES_ENABLED:
+    if audience == "principal" and GUIDELINES_ENABLED:
         from ashiato.core.services.guidelines_service import GuidelinesRetriever
         guidelines_retriever = GuidelinesRetriever()
         if guidelines_retriever.is_available():
@@ -120,8 +145,9 @@ def _run_stage2(
         else:
             print("⚠️  ASHIATO_GUIDELINES_ENABLED=true ですがインデックスが見つかりません")
             guidelines_retriever = None
+
     lines = []
-    lines.append(f"# あしあと（太子遊び冒険の森ASOBO）活動報告書（校長向け）")
+    lines.append(f"# {_AUDIENCE_TITLE[audience]}")
     lines.append(f"")
     lines.append(f"**日付**: {session_info['date']}  ")
     lines.append(f"**場所**: {session_info['location']}  ")
@@ -136,6 +162,7 @@ def _run_stage2(
     print("📝 セッション総括を生成中...")
     summary = generate_session_summary(
         children, session_info,
+        audience=audience,
         child_counts=child_counts, utterances_sample=utterances_sample,
     )
     lines.append(f"## セッション総括")
@@ -145,7 +172,7 @@ def _run_stage2(
     lines.append(f"---")
     lines.append(f"")
 
-    lines.append(f"## 観点別学習状況（児童別）")
+    lines.append(_SECTION_HEADING[audience])
     lines.append(f"")
 
     for i, child in enumerate(children, 1):
@@ -169,6 +196,7 @@ def _run_stage2(
         print(f"✍️  [{i}/{len(children)}] {child}: Stage2 記述生成中...")
         report = generate_child_report(
             child, evidence, session_info,
+            audience=audience,
             db_context=db_context,
             guidelines_retriever=guidelines_retriever,
         )
@@ -195,21 +223,29 @@ def main() -> None:
         epilog="""
 実行例:
   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json
+  PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json --audience parent
   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json --db ./db
 """,
     )
     parser.add_argument("--evidence", required=True, help="切片化結果JSONファイルのパス")
     parser.add_argument("--output", default=None, help="出力ファイルパス")
+    parser.add_argument(
+        "--audience",
+        default="principal",
+        choices=["principal", "parent"],
+        help="報告書の読者 (principal=校長向け / parent=保護者向け)",
+    )
     parser.add_argument("--db", default=None, metavar="DB_PATH",
                         help="DBパスを指定すると過去履歴・支援計画を報告書に反映")
     args = parser.parse_args()
 
     date_slug = datetime.today().strftime("%Y%m%d")
     session_info, supporter, children, child_counts, utterances_sample, evidence_by_child = load_evidence_json(args.evidence)
-    output_path = args.output or f"report_校長向け_{date_slug}.md"
+    output_path = args.output or f"report_{_AUDIENCE_LABEL[args.audience]}_{date_slug}.md"
     print(f"📂 切片化結果を読み込み中: {args.evidence}")
     _run_stage2(
         evidence_by_child, children, session_info, supporter, output_path,
+        audience=args.audience,
         child_counts=child_counts, utterances_sample=utterances_sample,
         db_path=args.db,
     )
