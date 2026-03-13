@@ -138,6 +138,47 @@ bash ashiato.sh store evidence_*.json
 
 ---
 
+## 5.5. ガイドラインRAG（オプション）
+
+学習指導要領のPDFをベクトルインデックス化し、プロンプトに関連箇所を自動挿入するRAGパイプラインです。
+
+### 役割
+
+| ソース | 用途 |
+|---|---|
+| `guidelines/current/`（小学校・中学校 学習指導要領） | Stage 1: 観点分類の根拠 / Stage 2: 記述スタイルの根拠 |
+| `guidelines/future/`（不登校支援・教育課程改革資料） | Stage 2: フリースクールの制度的背景・出席扱い申請の正当性補強 |
+
+### セットアップ手順
+
+```bash
+# 1. 追加ライブラリのインストール
+pip install pypdf numpy
+
+# 2. Ollamaにエンべディングモデルを追加（日本語対応多言語モデル）
+ollama pull nomic-embed-text
+
+# 3. インデックス構築（current/ + future/ のPDF全件を処理 → guidelines_index/ に保存）
+PYTHONPATH=src python3 -m ashiato.usecase.index_guidelines
+
+# 4. .env でRAGを有効化
+echo "ASHIATO_GUIDELINES_ENABLED=true" >> .env
+```
+
+インデックス構築後は `segment_evidence.py` / `generate_report.py` を通常通り実行するだけで、自動的にガイドライン参照箇所がプロンプトに挿入されます。
+
+### 環境変数（任意）
+
+| 変数名 | デフォルト | 説明 |
+|---|---|---|
+| `ASHIATO_GUIDELINES_ENABLED` | `false` | RAGを有効化するか |
+| `ASHIATO_EMBED_MODEL` | `nomic-embed-text` | Ollamaエンべディングモデル |
+| `ASHIATO_GUIDELINES_INDEX_DIR` | `guidelines_index` | インデックス保存ディレクトリ |
+| `ASHIATO_GUIDELINES_TOP_K` | `3` | クエリあたりの取得チャンク数 |
+| `ASHIATO_GUIDELINES_DIR` | `guidelines` | ガイドラインPDFのルートディレクトリ |
+
+---
+
 ## 6. プライバシーとデータ管理
 
 - **ローカル完結**: すべての推論処理は Mac mini 内で完結。音声データ自体は外部サーバーへ送信されません。
