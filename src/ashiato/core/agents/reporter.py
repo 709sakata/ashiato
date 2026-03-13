@@ -12,6 +12,38 @@ from ashiato.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
+# オーディエンス別システムプロンプト（child レポート用）
+_CHILD_SYSTEM: dict[str, str] = {
+    "principal": (
+        "あなたは{school_type}指導要録の観点別学習状況記述を専門とする教育記録作成者である。"
+        "提供された根拠発言リストのみを根拠に、支援者が観察した事実として記述する。"
+        "リストに存在しない事実の創作・推測・補完は絶対に行わない。"
+        "この記録は学校への出席扱い申請に使用される公式文書の下書きであり、"
+        "教員が内容を確認・承認した上で正式記録となる。"
+    ),
+    "parent": (
+        "あなたはフリースクール「あしあと」の保護者向け活動報告書を作成する教育アドバイザーです。"
+        "子どもの発言・行動の事実を温かく読みやすい文体で保護者に伝えることを専門とします。"
+        "提供された根拠発言リストのみを根拠に記述します。"
+        "子どもの発言は「」で直接引用し、リストに存在しない感情・印象の推測は行いません。"
+    ),
+}
+
+# オーディエンス別システムプロンプト（summary 用）
+_SUMMARY_SYSTEM: dict[str, str] = {
+    "principal": (
+        "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の公式記録補助者である。"
+        "校長先生への活動報告書（出席扱い申請書添付用）の冒頭総括文を作成することを専門とする。"
+        "与えられた【各児童の発言抜粋】に存在する事実のみを根拠に記述する。"
+        "記録にない活動・様子・発言の創作・推測・補完は絶対に行わない。"
+    ),
+    "parent": (
+        "あなたはフリースクール「あしあと」の活動便りを作成する教育アドバイザーです。"
+        "保護者の方がセッションの様子を親しみやすく理解できるよう、活動の概況を温かく伝えます。"
+        "提供された発言抜粋に存在する事実のみを根拠に記述します。"
+    ),
+}
+
 
 class ReportGenerator:
     """根拠発言リストから指導要録記述を生成するエージェント。"""
@@ -22,6 +54,7 @@ class ReportGenerator:
         evidence: dict[str, list[str]],
         session_info: dict,
         *,
+        audience: str = "principal",
         db_context: dict | None = None,
         build_context_section_fn=None,
         guidelines_retriever=None,
@@ -33,6 +66,7 @@ class ReportGenerator:
             child: 児童名
             evidence: {"観点": [発言, ...]} の切片化済みデータ
             session_info: セッション情報
+            audience: 報告書の読者 ("principal" | "parent")
             db_context: load_context_for_report() の戻り値（省略可）
             build_context_section_fn: コンテキストセクションを構築する関数（省略可）
             guidelines_retriever: GuidelinesRetriever | None（省略可）
@@ -42,13 +76,15 @@ class ReportGenerator:
         """
         school_type = session_info.get("school_type", "小学校")
 
-        system = (
-            f"あなたは{school_type}指導要録の観点別学習状況記述を専門とする教育記録作成者である。"
-            "提供された根拠発言リストのみを根拠に、支援者が観察した事実として記述する。"
-            "リストに存在しない事実の創作・推測・補完は絶対に行わない。"
-            "この記録は学校への出席扱い申請に使用される公式文書の下書きであり、"
-            "教員が内容を確認・承認した上で正式記録となる。"
-        )
+        # principal のみ school_type を埋め込む（parent プロンプトにはプレースホルダーなし）
+        if audience == "principal":
+            system = _CHILD_SYSTEM["principal"].format(school_type=school_type)
+        else:
+            system = _CHILD_SYSTEM[audience]
+
+        # RAG は principal のみ使用
+        if audience != "principal":
+            guidelines_retriever = None
 
         evidence_counts = {v: len(evidence[v]) for v in VIEWPOINTS}
         evidence_parts = []
@@ -92,8 +128,9 @@ class ReportGenerator:
                     len(curr_chunks), len(fut_chunks),
                 )
 
+        template_name = "generate_report_child" if audience == "principal" else f"generate_report_child_{audience}"
         prompt = load_prompt(
-            "generate_report_child",
+            template_name,
             child=child,
             school_type=school_type,
             session_date=session_info["date"],
@@ -121,6 +158,7 @@ class ReportGenerator:
         children: list[str],
         session_info: dict,
         *,
+        audience: str = "principal",
         child_counts: dict[str, int] | None = None,
         utterances_sample: str | None = None,
     ) -> str:
@@ -130,6 +168,7 @@ class ReportGenerator:
         Args:
             children: 参加児童名リスト
             session_info: セッション情報
+            audience: 報告書の読者 ("principal" | "parent")
             child_counts: 児童別発言件数
             utterances_sample: 児童別代表発言テキスト（evidence.json から）
 
@@ -139,20 +178,22 @@ class ReportGenerator:
         stats_text = "\n".join(f"  {k}: {v}件" for k, v in (child_counts or {}).items())
         representative = utterances_sample or ""
 
-        system = (
-            "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の公式記録補助者である。"
-            "校長先生への活動報告書（出席扱い申請書添付用）の冒頭総括文を作成することを専門とする。"
-            "与えられた【各児童の発言抜粋】に存在する事実のみを根拠に記述する。"
-            "記録にない活動・様子・発言の創作・推測・補完は絶対に行わない。"
-        )
+        system = _SUMMARY_SYSTEM[audience]
 
-        child_slot_lines = "\n".join(
-            f"{c}は「（{c}の発言抜粋から1つ引用）」と発言するなど、（観察した事実を1文で）"
-            for c in children
-        )
+        if audience == "parent":
+            child_slot_lines = "\n".join(
+                f"{c}さんは「（{c}さんの発言抜粋から1つ引用）」と話してくれるなど、（観察した様子を1文で）"
+                for c in children
+            )
+        else:
+            child_slot_lines = "\n".join(
+                f"{c}は「（{c}の発言抜粋から1つ引用）」と発言するなど、（観察した事実を1文で）"
+                for c in children
+            )
 
+        template_name = "generate_report_summary" if audience == "principal" else f"generate_report_summary_{audience}"
         prompt = load_prompt(
-            "generate_report_summary",
+            template_name,
             session_date=session_info["date"],
             session_location=session_info["location"],
             session_activity=session_info["activity"],
