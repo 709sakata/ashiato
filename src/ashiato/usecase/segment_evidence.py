@@ -39,19 +39,25 @@ def get_children(rows: list[dict], supporter: str) -> list[str]:
     return sorted(s for s in speakers if s not in excludes and not s.startswith("["))
 
 
-def build_transcript_per_child(rows: list[dict], child: str) -> str:
-    """児童の発言と直前の支援者発言をセットで抽出（文脈つき）"""
+def build_transcript_per_child(rows: list[dict], child: str, supporter: str = "") -> str:
+    """支援者の全発言と児童の発言を時系列で抽出する。
+
+    支援者の発言をすべて含めることで、児童の音声が少ない・ない場合でも
+    支援者の観察・声掛けから学習の証跡を抽出できるようにする。
+    他の児童の発言は含めない。
+    """
     lines = []
-    prev_supporter_line = ""
     for row in rows:
-        if row["speaker"] not in ("全員", "") and not row["speaker"].startswith("["):
-            if row["speaker"] != child:
-                prev_supporter_line = f"  支援者: {row['text']}"
-            else:
-                if prev_supporter_line:
-                    lines.append(prev_supporter_line)
-                    prev_supporter_line = ""
-                lines.append(f"  {child}: {row['text']}")
+        speaker = row["speaker"]
+        text = row.get("text", "")
+        if not text or text == "[聞き取り不明]":
+            continue
+        if speaker in ("全員", "") or speaker.startswith("["):
+            continue
+        if speaker == supporter:
+            lines.append(f"  支援者: {text}")
+        elif speaker == child:
+            lines.append(f"  {child}: {text}")
     return "\n".join(lines)
 
 
@@ -146,12 +152,12 @@ def _run_stage1(rows: list[dict], children: list[str], session_info: dict, suppo
 
     for i, child in enumerate(children, 1):
         child_count = sum(1 for r in rows if r["speaker"] == child)
-        if child_count == 0:
-            evidence_by_child[child] = {v: [] for v in VIEWPOINTS}
-            continue
 
-        transcript = build_transcript_per_child(rows, child)
-        print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
+        transcript = build_transcript_per_child(rows, child, supporter)
+        if child_count == 0:
+            print(f"\n📋 [{i}/{len(children)}] {child}（発言なし・支援者音声から推定）: Stage1 切片化中...")
+        else:
+            print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
         evidence = extract_evidence_per_viewpoint(child, transcript, session_info, guidelines_retriever)
         evidence_by_child[child] = evidence
 
