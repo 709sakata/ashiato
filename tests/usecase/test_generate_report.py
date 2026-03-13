@@ -6,6 +6,7 @@ import pytest
 from ashiato.usecase.generate_report import (
     build_context_section,
     normalize_child_report,
+    normalize_child_report_parent,
 )
 
 
@@ -45,6 +46,41 @@ class TestNormalizeChildReport:
         raw = "## 太郎\n\n### 知識・技能\n彼岸花を発見した。"
         result = normalize_child_report("太郎", raw)
         assert "彼岸花" in result
+
+
+# ---------------------------------------------------------------------------
+# normalize_child_report_parent
+# ---------------------------------------------------------------------------
+
+class TestNormalizeChildReportParent:
+    def test_replaces_pronoun_kare(self):
+        raw = "## 太郎さんの活動のようす\n\n### 今日の発見・できたこと\n彼は虫を見つけました。"
+        result = normalize_child_report_parent("太郎", raw)
+        assert "彼は" not in result
+        assert "太郎さんは" in result
+
+    def test_replaces_pronoun_kanojo(self):
+        raw = "## 花子さんの活動のようす\n\n### 考えたこと\n彼女が話してくれました。"
+        result = normalize_child_report_parent("花子", raw)
+        assert "彼女が" not in result
+        assert "花子さんが" in result
+
+    def test_no_false_pronoun_replacement(self):
+        raw = "## 太郎さんの活動のようす\n\n### 今日の発見・できたこと\n彼岸花を見つけました。"
+        result = normalize_child_report_parent("太郎", raw)
+        assert "彼岸花" in result
+
+    def test_strips_whitespace(self):
+        raw = "\n\n## 花子さんの活動のようす\n\n内容\n\n"
+        result = normalize_child_report_parent("花子", raw)
+        assert not result.startswith("\n")
+        assert not result.endswith("\n")
+
+    def test_does_not_normalize_viewpoint_headings(self):
+        """保護者向けは観点名の見出し正規化を行わない"""
+        raw = "## 太郎さんの活動のようす\n\n### 今日の発見・できたこと\n内容"
+        result = normalize_child_report_parent("太郎", raw)
+        assert "### 今日の発見・できたこと" in result
 
 
 # ---------------------------------------------------------------------------
