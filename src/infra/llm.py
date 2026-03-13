@@ -1,11 +1,9 @@
 """
-あしあとプロジェクト - 共有ユーティリティ
+あしあとプロジェクト - Ollama API クライアント
 
-- call_ollama(): 指数バックオフ付きリトライ対応の Ollama API クライアント
-- load_csv(): UTF-8-BOM 対応 CSV 読み込み
+call_ollama(): 指数バックオフ付きリトライ対応の Ollama HTTP クライアント
 """
 
-import csv
 import json
 import logging
 import sys
@@ -66,9 +64,3 @@ def call_ollama(
 
     logger.error("Ollama接続失敗（%d回試行）: %s", OLLAMA_MAX_RETRIES, last_error)
     sys.exit(1)
-
-
-def load_csv(path: str) -> list[dict]:
-    """UTF-8-BOM 対応で CSV ファイルを読み込み、行の辞書リストを返す。"""
-    with open(path, encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))

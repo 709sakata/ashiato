@@ -8,7 +8,7 @@ import urllib.error
 from datetime import datetime
 
 from config import OLLAMA_TIMEOUT
-from utils import call_ollama
+from infra.llm import call_ollama
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,6 @@ def _sanitize_name(name: str, max_length: int = 50) -> str:
 
 def ollama_extract_activity(csv_text: str) -> str:
     """発言記録から実際に行われた活動内容を抽出する。"""
-    # [Persona] ASOBOプロジェクトの公式文書担当者として役割を明確化
-    # [Context] 学校への出席扱い申請書という公的文書用途を明示
     system = (
         "あなたはNPO法人姫路YMCAが運営するフリースクール「あしあと」（太子遊び冒険の森ASOBO）の活動記録担当者であり、"
         "学校提出用の公式文書（出席扱い申請書）に記載する活動内容を"
@@ -91,7 +89,6 @@ def map_speakers(input_csv: str, output_csv: str | None = None) -> tuple[str, st
     school_type_input = input("学校種別（小学校/中学校、Enterで小学校）: ").strip()
     school_type = school_type_input if school_type_input in ("小学校", "中学校") else "小学校"
 
-    # LLMで活動内容を抽出
     print("\n⏳ 活動内容をAIが抽出中...")
     csv_text = "\n".join([f"{r['speaker']}：{r['text']}" for r in rows])
     try:
@@ -109,11 +106,10 @@ def map_speakers(input_csv: str, output_csv: str | None = None) -> tuple[str, st
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
         output_csv = f"{base}_mapped_{ts}.csv"
 
-    # 匿名化オプション
     print("\n─" * 50)
     anon_input = input("報告書用に児童名を匿名化しますか？（y/N）: ").strip().lower()
     anonymize = anon_input in ("y", "yes", "はい")
-    anon_mapping: dict[str, str] = {}  # 実名 → 匿名コード
+    anon_mapping: dict[str, str] = {}
     if anonymize:
         supporter_name = input("支援者の名前（匿名化から除外）: ").strip()
         code_index = 0
