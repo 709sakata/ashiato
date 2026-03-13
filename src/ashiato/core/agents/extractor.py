@@ -28,12 +28,14 @@ class EvidenceExtractor:
         child: str,
         transcript: str,
         session_info: dict | None = None,
+        guidelines_retriever=None,
     ) -> dict[str, list[str]]:
         """
         Args:
             child: 児童名
             transcript: build_transcript_per_child() が生成した発言テキスト
             session_info: セッション情報（school_type を含む）
+            guidelines_retriever: GuidelinesRetriever | None（省略可）
 
         Returns:
             {"知識・技能": [...], "思考・判断・表現": [...], "主体的に学習に取り組む態度": [...]}
@@ -47,11 +49,21 @@ class EvidenceExtractor:
             "発言テキストは一字一句変えずに記録し、推測・補完・解釈は絶対に行わない。"
         )
 
+        # ガイドラインRAGによる参照箇所の取得（current/ のみ: 観点分類の根拠）
+        guidelines_context = ""
+        if guidelines_retriever is not None and guidelines_retriever.is_available():
+            query = f"{school_type} 観点別評価 知識・技能 思考・判断・表現 主体的に学習に取り組む態度"
+            chunks = guidelines_retriever.retrieve(query, school_type, source_type="current")
+            guidelines_context = guidelines_retriever.format_for_prompt(chunks)
+            if guidelines_context:
+                logger.debug("ガイドラインRAG: %d チャンク取得（Stage1）", len(chunks))
+
         prompt = load_prompt(
             "segment_evidence",
             child=child,
             school_type=school_type,
             transcript=transcript,
+            guidelines_context=guidelines_context,
         )
 
         raw = call_ollama(

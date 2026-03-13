@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from ashiato.config import MAX_SESSIONS
+from ashiato.config import GUIDELINES_ENABLED, MAX_SESSIONS
 from ashiato.domain.viewpoints import VIEWPOINTS
 from ashiato.core.agents.extractor import EvidenceExtractor
 from ashiato.infra.csv_reader import load_csv
@@ -63,9 +63,14 @@ def build_full_transcript(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def extract_evidence_per_viewpoint(child: str, transcript: str, session_info: dict | None = None) -> dict[str, list[str]]:
+def extract_evidence_per_viewpoint(
+    child: str,
+    transcript: str,
+    session_info: dict | None = None,
+    guidelines_retriever=None,
+) -> dict[str, list[str]]:
     """Stage 1 - 切片化: 発言記録を観点別に分類し、根拠発言をそのまま抜き出す"""
-    return EvidenceExtractor().run(child, transcript, session_info)
+    return EvidenceExtractor().run(child, transcript, session_info, guidelines_retriever)
 
 
 def _pick_representative_utterances(rows: list[dict], children: list[str], n: int = 2) -> str:
@@ -125,6 +130,18 @@ def load_evidence_json(path: str) -> tuple[dict, str, list[str], dict, str, dict
 
 def _run_stage1(rows: list[dict], children: list[str], session_info: dict, supporter: str, date_slug: str) -> tuple[str, dict[str, dict[str, list[str]]]]:
     """切片化を実行してevidence.jsonに保存し、パスとevidence dictを返す"""
+    # ガイドラインRAGの初期化（有効化されている場合のみ）
+    guidelines_retriever = None
+    if GUIDELINES_ENABLED:
+        from ashiato.core.services.guidelines_service import GuidelinesRetriever
+        guidelines_retriever = GuidelinesRetriever()
+        if guidelines_retriever.is_available():
+            print("📚 ガイドラインRAGが有効です（インデックス取得済み）")
+        else:
+            print("⚠️  ASHIATO_GUIDELINES_ENABLED=true ですがインデックスが見つかりません")
+            print("   python -m ashiato.usecase.index_guidelines を先に実行してください")
+            guidelines_retriever = None
+
     evidence_by_child: dict[str, dict[str, list[str]]] = {}
 
     for i, child in enumerate(children, 1):
@@ -135,7 +152,7 @@ def _run_stage1(rows: list[dict], children: list[str], session_info: dict, suppo
 
         transcript = build_transcript_per_child(rows, child)
         print(f"\n📋 [{i}/{len(children)}] {child}（{child_count}発言）: Stage1 切片化中...")
-        evidence = extract_evidence_per_viewpoint(child, transcript, session_info)
+        evidence = extract_evidence_per_viewpoint(child, transcript, session_info, guidelines_retriever)
         evidence_by_child[child] = evidence
 
         print(f"  ┌─ 切片化結果（確認してください）")
