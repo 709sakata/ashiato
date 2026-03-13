@@ -3,8 +3,8 @@
 あしあとプロジェクト - セッションデータをSupabase DBに蓄積
 
 使い方:
-  python3 store_session.py evidence_20261018.json
-  python3 store_session.py --summary
+  PYTHONPATH=src python3 src/usecase/store_session.py evidence_20261018.json
+  PYTHONPATH=src python3 src/usecase/store_session.py --summary
 
 前提:
   - 環境変数 SUPABASE_DB_URL が設定されていること
@@ -18,10 +18,10 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from config import VIEWPOINTS
+from domain.viewpoints import VIEWPOINTS
 
 logger = logging.getLogger(__name__)
-from db import Connection, get_connection
+from infra.db import Connection, get_connection
 
 
 # =============================================================================
@@ -74,7 +74,6 @@ def store(evidence_path: str) -> None:
     conn = get_connection()
 
     try:
-        # セッション重複チェック（同日 × 同支援者）
         existing = conn.execute(
             """SELECT s.id FROM sessions s
                JOIN session_supporters ss ON ss.session_id = s.id
@@ -92,12 +91,10 @@ def store(evidence_path: str) -> None:
             conn.close()
             return
 
-        # マスタ upsert
         location_id      = upsert_location(conn, info["location"])
         activity_type_id = upsert_activity_type(conn, info["activity"])
         supporter_id     = upsert_supporter(conn, supporter_name)
 
-        # セッション登録
         row = conn.execute(
             """INSERT INTO sessions (date, location_id, activity_type_id, imported_at)
                VALUES (%s, %s, %s, %s)
@@ -111,20 +108,17 @@ def store(evidence_path: str) -> None:
         ).fetchone()
         session_id = str(row["id"])
 
-        # セッション担当支援者を登録
         conn.execute(
             "INSERT INTO session_supporters (session_id, supporter_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (session_id, supporter_id),
         )
 
-        # 観点ID キャッシュ
         viewpoint_ids = {vp: get_viewpoint_id(conn, vp) for vp in VIEWPOINTS}
 
         total_utterances = 0
         for child_name, evidence in evidence_by_child.items():
             child_id = upsert_child(conn, child_name)
 
-            # セッション参加児童を登録
             conn.execute(
                 "INSERT INTO session_children (session_id, child_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                 (session_id, child_id),

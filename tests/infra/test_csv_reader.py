@@ -1,16 +1,13 @@
 """
-utils.py の純粋関数のユニットテスト
+infra/csv_reader.py の純粋関数のユニットテスト
 """
 import csv
 import os
-import sys
 import tempfile
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils import load_csv
+from infra.csv_reader import load_csv
 
 
 class TestLoadCsv:
@@ -38,7 +35,6 @@ class TestLoadCsv:
         )
         try:
             rows = load_csv(path)
-            # BOM があっても正しくヘッダを認識できること
             assert "speaker" in rows[0]
             assert rows[0]["speaker"] == "山田"
         finally:

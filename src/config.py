@@ -33,12 +33,6 @@ SUPABASE_DB_URL: str = os.environ.get("SUPABASE_DB_URL", "")
 OLLAMA_URL: str = os.environ.get("ASHIATO_OLLAMA_URL", "http://localhost:11434/api/generate")
 MODEL: str = os.environ.get("ASHIATO_MODEL", "qwen2.5:7b")
 
-VIEWPOINTS: list[str] = [
-    "知識・技能",
-    "思考・判断・表現",
-    "主体的に学習に取り組む態度",
-]
-
 MAX_SESSIONS: int = int(os.environ.get("ASHIATO_MAX_SESSIONS", "4"))
 
 OLLAMA_TIMEOUT: int = int(os.environ.get("ASHIATO_OLLAMA_TIMEOUT", "120"))

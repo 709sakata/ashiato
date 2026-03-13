@@ -6,19 +6,16 @@
                    例: postgresql://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres
 
 使い方:
-  from db import get_connection
+  from infra.db import get_connection
   conn = get_connection()
   row  = conn.execute("SELECT id FROM children WHERE name = %s", ("太郎",)).fetchone()
   rows = conn.execute("SELECT * FROM sessions ORDER BY date").fetchall()
 """
 
-import os
-from pathlib import Path
-
 import psycopg2
 import psycopg2.extras
 
-SUPABASE_DB_URL: str = os.environ.get("SUPABASE_DB_URL", "")
+from config import SUPABASE_DB_URL
 
 
 class _Cursor:

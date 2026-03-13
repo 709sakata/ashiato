@@ -12,7 +12,7 @@
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$BIN_DIR/.." && pwd)"
-DB_PATH="${ASHIATO_DB:-${PROJECT_ROOT}/db/ashiato.db}"
+export PYTHONPATH="${PROJECT_ROOT}/src"
 CMD="${1:-help}"
 shift
 
@@ -29,7 +29,7 @@ case "$CMD" in
     echo "Mac miniで切片化実行中..." >&2
     # Mac miniにCSVを転送
     scp -q "$CSV_FILE" "${MAC_MINI}:/tmp/mapped_to_segment.csv"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/generate_report.py /tmp/mapped_to_segment.csv --stage 1"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && PYTHONPATH=src python3 src/usecase/segment_evidence.py /tmp/mapped_to_segment.csv"
     # 生成された evidence.json を取得
     scp -q "${MAC_MINI}:~/scripts/ashiato/evidence_*.json" ./
     ;;
@@ -38,7 +38,7 @@ case "$CMD" in
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh report <evidence_YYYYMMDD.json>}"
     echo "Mac miniで報告書生成中..." >&2
     scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_report.json"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/generate_report.py --stage 2 --evidence /tmp/evidence_to_report.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && PYTHONPATH=src python3 src/usecase/generate_report.py --evidence /tmp/evidence_to_report.json"
     # 生成された報告書（Markdown）を取得
     scp -q "${MAC_MINI}:~/scripts/ashiato/report_*.md" ./
     ;;
@@ -47,12 +47,11 @@ case "$CMD" in
     EVIDENCE_FILE="${1:?使い方: bash ashiato.sh store <evidence_YYYYMMDD.json>}"
     echo "Mac miniのDBへ保存中..." >&2
     scp -q "$EVIDENCE_FILE" "${MAC_MINI}:/tmp/evidence_to_store.json"
-    ssh "$MAC_MINI" "cd ~/scripts/ashiato && python3 src/store_session.py /tmp/evidence_to_store.json"
+    ssh "$MAC_MINI" "cd ~/scripts/ashiato && PYTHONPATH=src python3 src/usecase/store_session.py /tmp/evidence_to_store.json"
     ;;
   plan)
     # 個別支援計画を生成
-    shift  # 'plan' を消費
-    python3 "${PROJECT_ROOT}/src/generate_support_plan.py" "$@"
+    python3 "${PROJECT_ROOT}/src/usecase/manage_support_plan.py" "$@"
     ;;
   run)
     MINUTES="${1:-60}"
@@ -61,8 +60,10 @@ case "$CMD" in
     AUDIO_FILE=$(bash "${BIN_DIR}/record.sh" "$MINUTES")
     echo "② 文字起こし"
     TRANSCRIPT_FILE=$(bash "${BIN_DIR}/transcribe.sh" "$AUDIO_FILE")
-    echo "③ 切片化 + 報告書生成（一括）"
-    python3 "${PROJECT_ROOT}/src/generate_report.py" "$TRANSCRIPT_FILE"
+    echo "③ 切片化 → evidence.json"
+    EVIDENCE_FILE=$(python3 "${PROJECT_ROOT}/src/usecase/segment_evidence.py" "$TRANSCRIPT_FILE")
+    echo "④ 報告書生成"
+    python3 "${PROJECT_ROOT}/src/usecase/generate_report.py" --evidence "$EVIDENCE_FILE"
     ;;
   help|*)
     echo "使い方:"
@@ -80,7 +81,7 @@ case "$CMD" in
     echo "  ★ 初回セットアップ（新しい児童）:"
     echo "     # 保護者面談の録音から作成（推奨）:"
     echo "     1. bash ashiato.sh transcribe 面談録音.mp3"
-    echo "     2. python3 map_speakers.py output.csv         # 話者マッピング（保護者/本人/支援者）"
+    echo "     2. PYTHONPATH=src python3 src/usecase/map_speakers.py output.csv"
     echo "     3. bash ashiato.sh plan --init --child 太郎 --intake 面談_mapped.csv"
     echo "     # または対話式入力:"
     echo "     bash ashiato.sh plan --init --child 太郎"
@@ -93,8 +94,5 @@ case "$CMD" in
     echo ""
     echo "  ★ 四半期ごとの計画更新:"
     echo "     bash ashiato.sh plan --update --child 太郎"
-    echo ""
-    echo "  DB パス: ${DB_PATH}"
-    echo "  （環境変数 ASHIATO_DB で変更可）"
     ;;
 esac

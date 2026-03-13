@@ -1,14 +1,9 @@
 """
-map_speakers.py の純粋関数のユニットテスト
+usecase/map_speakers.py の純粋関数のユニットテスト
 """
-import sys
-import os
-
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from map_speakers import _sanitize_name
+from usecase.map_speakers import _sanitize_name
 
 
 class TestSanitizeName:

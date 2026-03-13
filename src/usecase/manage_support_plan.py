@@ -6,19 +6,19 @@
 
 使い方:
   # 初回計画作成（保護者面談の文字起こしCSVから）
-  python3 generate_support_plan.py --init --child 太郎 --intake intake_mapped.csv
+  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --init --child 太郎 --intake intake_mapped.csv
 
   # 初回計画作成（対話式入力）
-  python3 generate_support_plan.py --init --child 太郎
+  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --init --child 太郎
 
   # 四半期更新（蓄積セッションデータをもとに改定版を生成）
-  python3 generate_support_plan.py --update --child 太郎
+  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --update --child 太郎
 
   # 現行計画の表示
-  python3 generate_support_plan.py --show --child 太郎
+  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --show --child 太郎
 
   # 登録済み児童と計画状況の一覧
-  python3 generate_support_plan.py --list
+  PYTHONPATH=src python3 src/usecase/manage_support_plan.py --list
 """
 
 import csv
@@ -28,12 +28,13 @@ import sys
 import argparse
 from pathlib import Path
 from datetime import datetime, date
-from config import MAX_SESSIONS, VIEWPOINTS
+from config import MAX_SESSIONS
+from domain.viewpoints import VIEWPOINTS
 
 logger = logging.getLogger(__name__)
-from db import Connection, get_connection
-from store_session import upsert_child
-from utils import call_ollama
+from infra.db import Connection, get_connection
+from usecase.store_session import upsert_child
+from infra.llm import call_ollama
 
 
 # =============================================================================
@@ -71,7 +72,6 @@ def save_plan(
     ).fetchone()
     plan_id = str(row["id"])
 
-    # 観点ごとの目標を support_plan_goals へ正規化挿入
     for sort_order, vp_code in enumerate(VIEWPOINTS):
         goal_text = goals_dict.get(vp_code, "")
         if not goal_text:
@@ -599,7 +599,6 @@ def main():
                         help="--init 専用: 保護者面談の文字起こしCSV（map_speakers.py 出力）を指定すると自動抽出")
     parser.add_argument("--school-type", choices=["小学校", "中学校"], default="小学校")
     parser.add_argument("--sessions", type=int, default=12, help="更新時に参照するセッション数（デフォルト: 12）")
-    # --db は後方互換のために残すが Supabase 移行後は無視される
     parser.add_argument("--db", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
