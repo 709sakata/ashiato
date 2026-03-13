@@ -67,22 +67,31 @@ class TestBuildTranscriptPerChild:
         ]
 
     def test_includes_child_utterances(self):
-        result = build_transcript_per_child(self._rows(), "太郎")
+        result = build_transcript_per_child(self._rows(), "太郎", "山田")
         assert "太郎: どこにいるの？" in result
         assert "太郎: あ、いた！" in result
 
-    def test_includes_preceding_supporter_line(self):
-        result = build_transcript_per_child(self._rows(), "太郎")
+    def test_includes_all_supporter_lines(self):
+        result = build_transcript_per_child(self._rows(), "太郎", "山田")
         assert "支援者: カブトムシを探してみよう" in result
+        assert "支援者: クヌギの木の近くかな" in result
 
     def test_excludes_other_child(self):
-        result = build_transcript_per_child(self._rows(), "太郎")
+        result = build_transcript_per_child(self._rows(), "太郎", "山田")
         assert "花子" not in result
 
-    def test_no_utterances_returns_empty(self):
-        rows = [{"speaker": "山田", "text": "説明"}]
-        result = build_transcript_per_child(rows, "太郎")
-        assert result == ""
+    def test_no_child_utterances_still_includes_supporter(self):
+        """児童の発言がなくても支援者の発言は含まれる（支援者音声のみ録音ケース対応）"""
+        rows = [{"speaker": "山田", "text": "説明します"}]
+        result = build_transcript_per_child(rows, "太郎", "山田")
+        assert "支援者: 説明します" in result
+
+    def test_no_supporter_arg_excludes_other_speakers(self):
+        """supporter引数なしの場合、支援者も他の児童も含まれない"""
+        result = build_transcript_per_child(self._rows(), "太郎")
+        assert "太郎: どこにいるの？" in result
+        assert "支援者" not in result
+        assert "花子" not in result
 
 
 # ---------------------------------------------------------------------------
