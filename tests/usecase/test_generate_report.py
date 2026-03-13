@@ -3,7 +3,7 @@ usecase/generate_report.py の純粋関数（LLM・DB不要）のユニットテ
 """
 import pytest
 
-from usecase.generate_report import (
+from ashiato.usecase.generate_report import (
     build_context_section,
     normalize_child_report,
 )

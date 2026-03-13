@@ -3,8 +3,8 @@
 あしあとプロジェクト - セッションデータをSupabase DBに蓄積
 
 使い方:
-  PYTHONPATH=src python3 src/usecase/store_session.py evidence_20261018.json
-  PYTHONPATH=src python3 src/usecase/store_session.py --summary
+  PYTHONPATH=src python3 src/ashiato/usecase/store_session.py evidence_20261018.json
+  PYTHONPATH=src python3 src/ashiato/usecase/store_session.py --summary
 
 前提:
   - 環境変数 SUPABASE_DB_URL が設定されていること
@@ -18,10 +18,10 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from domain.viewpoints import VIEWPOINTS
+from ashiato.domain.viewpoints import VIEWPOINTS
 
 logger = logging.getLogger(__name__)
-from infra.db import Connection, get_connection
+from ashiato.infra.db import Connection, get_connection
 
 
 # =============================================================================

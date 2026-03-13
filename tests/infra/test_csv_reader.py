@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 
-from infra.csv_reader import load_csv
+from ashiato.infra.csv_reader import load_csv
 
 
 class TestLoadCsv:

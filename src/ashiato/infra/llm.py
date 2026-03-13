@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
-from config import MODEL, OLLAMA_MAX_RETRIES, OLLAMA_TIMEOUT, OLLAMA_URL
+from ashiato.config import MODEL, OLLAMA_MAX_RETRIES, OLLAMA_TIMEOUT, OLLAMA_URL
 
 logger = logging.getLogger(__name__)
 
