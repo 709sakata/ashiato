@@ -4,8 +4,10 @@ usecase/generate_report.py の純粋関数（LLM・DB不要）のユニットテ
 import pytest
 
 from ashiato.usecase.generate_report import (
+    _anonymize,
     build_context_section,
     normalize_child_report,
+    normalize_child_report_donor,
     normalize_child_report_parent,
 )
 
@@ -81,6 +83,63 @@ class TestNormalizeChildReportParent:
         raw = "## 太郎さんの活動のようす\n\n### 今日の発見・できたこと\n内容"
         result = normalize_child_report_parent("太郎", raw)
         assert "### 今日の発見・できたこと" in result
+
+
+# ---------------------------------------------------------------------------
+# normalize_child_report_donor
+# ---------------------------------------------------------------------------
+
+class TestNormalizeChildReportDonor:
+    def test_replaces_pronoun_kare_with_anon_name(self):
+        raw = "## お子さんA\n\n### 体験から広がった世界\n彼は虫を見つけました。"
+        result = normalize_child_report_donor("お子さんA", raw)
+        assert "彼は" not in result
+        assert "お子さんAは" in result
+
+    def test_replaces_pronoun_kanojo_with_anon_name(self):
+        raw = "## お子さんB\n\n### 挑戦し続ける姿\n彼女が話してくれました。"
+        result = normalize_child_report_donor("お子さんB", raw)
+        assert "彼女が" not in result
+        assert "お子さんBが" in result
+
+    def test_no_false_pronoun_replacement(self):
+        raw = "## お子さんA\n\n### 体験から広がった世界\n彼岸花を発見しました。"
+        result = normalize_child_report_donor("お子さんA", raw)
+        assert "彼岸花" in result
+
+    def test_strips_whitespace(self):
+        raw = "\n\n## お子さんA\n\n内容\n\n"
+        result = normalize_child_report_donor("お子さんA", raw)
+        assert not result.startswith("\n")
+        assert not result.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# _anonymize
+# ---------------------------------------------------------------------------
+
+class TestAnonymize:
+    def test_replaces_names_in_children(self):
+        children, _, _, _ = _anonymize(["太郎", "花子"], {}, None, None)
+        assert children == ["お子さんA", "お子さんB"]
+
+    def test_replaces_keys_in_evidence(self):
+        _, ev, _, _ = _anonymize(["太郎"], {"太郎": {"知識・技能": ["発言"]}}, None, None)
+        assert "お子さんA" in ev
+        assert "太郎" not in ev
+
+    def test_replaces_names_in_child_counts(self):
+        _, _, counts, _ = _anonymize(["太郎", "花子"], {}, {"太郎": 3, "花子": 2}, None)
+        assert counts == {"お子さんA": 3, "お子さんB": 2}
+
+    def test_replaces_names_in_utterances_sample(self):
+        _, _, _, sample = _anonymize(["太郎"], {}, None, "太郎:「虫を見つけた」")
+        assert "お子さんA" in sample
+        assert "太郎" not in sample
+
+    def test_none_utterances_sample_stays_none(self):
+        _, _, _, sample = _anonymize(["太郎"], {}, None, None)
+        assert sample is None
 
 
 # ---------------------------------------------------------------------------
