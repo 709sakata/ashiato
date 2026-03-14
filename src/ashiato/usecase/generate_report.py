@@ -2,7 +2,7 @@
 """
 あしあとプロジェクト - Stage2 報告書生成スクリプト
 入力: evidence_YYYYMMDD.json（Stage1切片化済み）
-出力: report_校長向け_YYYYMMDD.md / report_保護者向け_YYYYMMDD.md
+出力: report_校長向け_YYYYMMDD.md / report_保護者向け_YYYYMMDD.md / report_寄付者向け_YYYYMMDD.md
 """
 
 import logging
@@ -19,14 +19,16 @@ from ashiato.usecase.segment_evidence import load_evidence_json
 
 logger = logging.getLogger(__name__)
 
-_AUDIENCE_LABEL = {"principal": "校長向け", "parent": "保護者向け"}
+_AUDIENCE_LABEL = {"principal": "校長向け", "parent": "保護者向け", "donor": "寄付者向け"}
 _AUDIENCE_TITLE = {
     "principal": "あしあと（太子遊び冒険の森ASOBO）活動報告書（校長向け）",
     "parent":    "あしあと（太子遊び冒険の森ASOBO）活動報告書（保護者向け）",
+    "donor":     "あしあと（太子遊び冒険の森ASOBO）活動インパクトレポート（寄付者向け）",
 }
 _SECTION_HEADING = {
     "principal": "## 観点別学習状況（児童別）",
     "parent":    "## お子さんの活動のようす",
+    "donor":     "## 参加者ごとの学びの記録",
 }
 
 
@@ -80,6 +82,32 @@ def normalize_child_report_parent(child: str, raw: str) -> str:
     return raw.strip()
 
 
+def normalize_child_report_donor(child: str, raw: str) -> str:
+    """寄付者向けレポートの後処理: 代名詞置換のみ（child は匿名化済み名）"""
+    raw = re.sub(r'彼女(?=[はがのをにへもと])', child, raw)
+    raw = re.sub(r'彼(?=[はがのをにへもと])', child, raw)
+    return raw.strip()
+
+
+def _anonymize(
+    children: list[str],
+    evidence_by_child: dict,
+    child_counts: dict | None,
+    utterances_sample: str | None,
+) -> tuple[list[str], dict, dict | None, str | None]:
+    """child 名を「お子さんA/B/C...」に置換して返す（寄付者向け匿名化）"""
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    name_map = {name: f"お子さん{labels[i]}" for i, name in enumerate(children)}
+    anon_children = [name_map[c] for c in children]
+    anon_evidence = {name_map[c]: v for c, v in evidence_by_child.items()}
+    anon_counts = {name_map[c]: v for c, v in child_counts.items()} if child_counts else None
+    anon_sample = utterances_sample
+    if anon_sample:
+        for real, anon in name_map.items():
+            anon_sample = anon_sample.replace(real, anon)
+    return anon_children, anon_evidence, anon_counts, anon_sample
+
+
 def generate_child_report(
     child: str,
     evidence: dict[str, list[str]],
@@ -101,6 +129,8 @@ def generate_child_report(
     )
     if audience == "parent":
         return normalize_child_report_parent(child, raw)
+    if audience == "donor":
+        return normalize_child_report_donor(child, raw)
     return normalize_child_report(child, raw)
 
 
@@ -135,6 +165,12 @@ def _run_stage2(
     db_path: str | None = None,
 ) -> None:
     """evidence dictから報告書Markdownを生成して書き出す"""
+    # 寄付者向けは child 名を匿名化する
+    if audience == "donor":
+        children, evidence_by_child, child_counts, utterances_sample = _anonymize(
+            children, evidence_by_child, child_counts, utterances_sample
+        )
+
     # ガイドラインRAGの初期化（principal かつ有効化されている場合のみ）
     guidelines_retriever = None
     if audience == "principal" and GUIDELINES_ENABLED:
@@ -224,6 +260,7 @@ def main() -> None:
 実行例:
   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json
   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json --audience parent
+  PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json --audience donor
   PYTHONPATH=src python3 src/ashiato/usecase/generate_report.py --evidence evidence_20261018.json --db ./db
 """,
     )
@@ -232,8 +269,8 @@ def main() -> None:
     parser.add_argument(
         "--audience",
         default="principal",
-        choices=["principal", "parent"],
-        help="報告書の読者 (principal=校長向け / parent=保護者向け)",
+        choices=["principal", "parent", "donor"],
+        help="報告書の読者 (principal=校長向け / parent=保護者向け / donor=寄付者向け・匿名化)",
     )
     parser.add_argument("--db", default=None, metavar="DB_PATH",
                         help="DBパスを指定すると過去履歴・支援計画を報告書に反映")
